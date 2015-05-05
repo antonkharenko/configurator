@@ -40,7 +40,7 @@ public class ConfigService {
 		this.configTypes = ImmutableMap.copyOf(builder.configTypes);
 
 		// TODO: refactoring
-		Map<Class, String> classToType = new HashMap<Class, String>(configTypes.size());
+		Map<Class, String> classToType = new HashMap<>(configTypes.size());
 		for (Map.Entry<String, Class> typeEntry : configTypes.entrySet()) {
 			classToType.put(typeEntry.getValue(), typeEntry.getKey());
 		}
@@ -91,7 +91,7 @@ public class ConfigService {
 		return upsertConfigEntity(type, key, config.toString()); //TODO: deserialize object
 	}
 
-	public <T> boolean upsertConfigEntity(String type, String key, String config) {
+	public boolean upsertConfigEntity(String type, String key, String config) {
 		checkArgument(!Strings.isNullOrEmpty(type));
 		checkArgument(!Strings.isNullOrEmpty(key));
 		checkArgument(!Strings.isNullOrEmpty(config));
@@ -133,7 +133,7 @@ public class ConfigService {
 		checkArgument(!Strings.isNullOrEmpty(type));
 
 		Map<String, ChildData> entities = configCache.getCurrentChildren(configTypePath(type));
-		List<String> configEntities = new ArrayList<String>(entities.size());
+		List<String> configEntities = new ArrayList<>(entities.size());
 		for (ChildData cdata : entities.values()) {
 			byte[] dataAsBytes = cdata.getData();
 			if (dataAsBytes != null) {
@@ -178,7 +178,7 @@ public class ConfigService {
 	public static class Builder {
 		private final CuratorFramework zkClient;
 		private final String environment;
-		private final Map<String, Class> configTypes = new HashMap<String, Class>();
+		private final Map<String, Class> configTypes = new HashMap<>();
 
 		public Builder(CuratorFramework zkClient, String environment) {
 			checkNotNull(zkClient);
