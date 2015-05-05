@@ -20,7 +20,7 @@
 
     <dependencies>
 
-        <!-- Spring Framework -->
+        <!-- Spring Framework
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-core</artifactId>
@@ -36,6 +36,7 @@
             <artifactId>spring-context</artifactId>
             <version>${spring.version}</version>
         </dependency>
+        -->
 
         <!-- Guava -->
         <dependency>
@@ -54,7 +55,6 @@
             <groupId>org.apache.zookeeper</groupId>
             <artifactId>zookeeper</artifactId>
             <version>${zookeeper.version}</version>
-
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>
@@ -106,6 +106,8 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <!-- Examples -->
         <dependency>
             <groupId>org.apache.curator</groupId>
             <artifactId>curator-examples</artifactId>
