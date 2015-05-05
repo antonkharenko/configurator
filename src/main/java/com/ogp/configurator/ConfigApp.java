@@ -15,39 +15,43 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class App {
+public class ConfigApp {
+
+	private static final String CONFIG_BASE_PATH = "/config";
+	private static final String ENVIRONMENT = "local";
+	private static final String CONFIG_ENVIRONMENT_PATH = CONFIG_BASE_PATH + "/" + ENVIRONMENT;
+	private static final String CONFIG_GROUP = "servers";
+	private static final String CONFIG_GROUP_PATH = CONFIG_ENVIRONMENT_PATH + "/" + CONFIG_GROUP;
+
 
 	public static void main(String[] args) throws Exception {
-		// Start ZK client
+		// Start zookeeper client
 		final String zookeeperConnectionString = "127.0.0.1:2181";
 		final RetryPolicy retryPolicy = new ExponentialBackoffRetry(1000, 3);
 		final CuratorFramework client = CuratorFrameworkFactory.newClient(zookeeperConnectionString, retryPolicy);
 		client.start();
 
 		// Init config paths
-		final String configPath = "/config";
-		final String configEnvironmentPath = configPath + "/dev";
-		final String configTypePath = configEnvironmentPath + "/TestConfiguration";
-		for (String path : Arrays.asList(configPath, configEnvironmentPath, configTypePath)) {
+		for (String path : Arrays.asList(CONFIG_BASE_PATH, CONFIG_ENVIRONMENT_PATH, CONFIG_GROUP_PATH)) {
 			if (client.checkExists().forPath(path) == null)
 				client.create().forPath(path);
 		}
 
-		// Create or set config entity
-		TestConfiguration testConfiguration = new TestConfiguration("123", "test-server", "127.0.0.1", 3456);
-		upsertConfigEntity(client, configTypePath, testConfiguration);
+		// Upsert (update or insert) config entity
+		ServerConfigEntity testConfiguration = new ServerConfigEntity("123", "test-server", "127.0.0.1", 3456);
+		upsertConfigEntity(client, CONFIG_GROUP_PATH, testConfiguration);
 
 		// Read config entity
-		byte[] configData = client.getData().forPath(getConfigEntityPath(configTypePath, testConfiguration));
+		byte[] configData = client.getData().forPath(getConfigEntityPath(CONFIG_GROUP_PATH, testConfiguration));
 		String configDataAsString = new String(configData);
 		System.out.println(configDataAsString);
 
 		// List config entities of same type
-		List<String> entities = client.getChildren().forPath(configTypePath);
+		List<String> entities = client.getChildren().forPath(CONFIG_GROUP_PATH);
 		System.out.println(entities);
 
-		// Cache config tree
-		final TreeCache configCache = new TreeCache(client, configEnvironmentPath);
+		// Init config cache
+		final TreeCache configCache = new TreeCache(client, CONFIG_ENVIRONMENT_PATH);
 		configCache.start();
 		configCache.getListenable().addListener(new TreeCacheListener() {
 			public void childEvent(CuratorFramework client, TreeCacheEvent event) throws Exception {
@@ -55,30 +59,29 @@ public class App {
 			}
 		});
 
-
+		// Run some config modifications in separate thread
 		ExecutorService exec = Executors.newSingleThreadExecutor();
 		exec.submit(new Runnable() {
 			public void run() {
 				try {
 					// Insert new entity
-					TestConfiguration testConfiguration2 = new TestConfiguration("456", "qa-server", "127.0.0.1", 6789);
-					upsertConfigEntity(client, configTypePath, testConfiguration2);
+					ServerConfigEntity testConfiguration2 = new ServerConfigEntity("456", "qa-server", "127.0.0.1", 6789);
+					upsertConfigEntity(client, CONFIG_GROUP_PATH, testConfiguration2);
 
-					// Check local cache
-					Map<String, ChildData> entities = configCache.getCurrentChildren(configTypePath);
+					// Print local cache
+					Map<String, ChildData> entities = configCache.getCurrentChildren(CONFIG_GROUP_PATH);
 					for (ChildData cdata : entities.values()) {
 						System.out.println("== " + childDataToString(cdata));
 					}
-
 
 					// Delete entity
-					client.delete().forPath(getConfigEntityPath(configTypePath, testConfiguration2));
+					client.delete().forPath(getConfigEntityPath(CONFIG_GROUP_PATH, testConfiguration2));
 
-					entities = configCache.getCurrentChildren(configTypePath);
+					// Print local cache
+					entities = configCache.getCurrentChildren(CONFIG_GROUP_PATH);
 					for (ChildData cdata : entities.values()) {
 						System.out.println("== " + childDataToString(cdata));
 					}
-
 				} catch (Exception e) {
 					e.printStackTrace();
 				}
@@ -98,11 +101,11 @@ public class App {
 		}
 	}
 
-	private static String getConfigEntityPath(String configTypePath, TestConfiguration configEntity) {
+	private static String getConfigEntityPath(String configTypePath, ServerConfigEntity configEntity) {
 		return configTypePath + "/" + configEntity.getId();
 	}
 
-	private static void upsertConfigEntity(CuratorFramework client, String configTypePath, TestConfiguration configEntity) throws Exception {
+	private static void upsertConfigEntity(CuratorFramework client, String configTypePath, ServerConfigEntity configEntity) throws Exception {
 		final String configEntityPath = getConfigEntityPath(configTypePath, configEntity);
 		if (client.checkExists().forPath(configEntityPath) == null) {
 			client.create().forPath(configEntityPath, configEntity.toString().getBytes());

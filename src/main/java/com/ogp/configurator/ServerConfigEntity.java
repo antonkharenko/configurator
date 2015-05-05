@@ -3,14 +3,14 @@ package com.ogp.configurator;
 /**
  * @author Anton Kharenko
  */
-public class TestConfiguration {
-	
+public class ServerConfigEntity {
+
 	private final String id;
 	private final String name;
 	private final String host;
 	private final int port;
 
-	public TestConfiguration(String id, String name, String host, int port) {
+	public ServerConfigEntity(String id, String name, String host, int port) {
 		this.id = id;
 		this.name = name;
 		this.host = host;
