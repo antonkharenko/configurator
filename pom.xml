@@ -6,6 +6,7 @@
     <groupId>com.ogp</groupId>
     <artifactId>configurator</artifactId>
     <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
 
     <properties>
         <junit.version>4.12</junit.version>
@@ -16,6 +17,7 @@
         <slf4j-api.version>1.7.7</slf4j-api.version>
         <disruptor.version>3.3.0</disruptor.version>
         <log4j.version>2.1</log4j.version>
+        <jackson.version>2.5.3</jackson.version>
     </properties>
 
     <dependencies>
@@ -37,7 +39,11 @@
             <version>${spring.version}</version>
         </dependency>
         -->
-
+		<dependency>
+		    <groupId>com.fasterxml.jackson.core</groupId>
+		    <artifactId>jackson-databind</artifactId>
+		    <version>${jackson.version}</version>
+		</dependency>
         <!-- Guava -->
         <dependency>
             <groupId>com.google.guava</groupId>
@@ -135,6 +141,15 @@
                     <target>1.7</target>
                 </configuration>
             </plugin>
+			<plugin>
+				<artifactId>maven-assembly-plugin</artifactId>
+				<version>2.3</version>
+				<configuration>
+					<descriptorRefs>
+						<descriptorRef>jar-with-dependencies</descriptorRef>
+					</descriptorRefs>
+				</configuration>
+			</plugin>
         </plugins>
     </build>
 

@@ -5,11 +5,15 @@ package com.ogp.configurator;
  */
 public class ServerConfigEntity {
 
-	private final String id;
-	private final String name;
-	private final String host;
-	private final int port;
+	private  String id;
+	private  String name;
+	private  String host;
+	private  int port;
 
+	public ServerConfigEntity() {
+		
+	}
+	
 	public ServerConfigEntity(String id, String name, String host, int port) {
 		this.id = id;
 		this.name = name;
@@ -31,6 +35,38 @@ public class ServerConfigEntity {
 
 	public int getPort() {
 		return port;
+	}
+
+	
+	/**
+	 * @param id the id to set
+	 */
+	public void setId(String id) {
+		this.id = id;
+	}
+
+	
+	/**
+	 * @param name the name to set
+	 */
+	public void setName(String name) {
+		this.name = name;
+	}
+
+	
+	/**
+	 * @param host the host to set
+	 */
+	public void setHost(String host) {
+		this.host = host;
+	}
+
+	
+	/**
+	 * @param port the port to set
+	 */
+	public void setPort(int port) {
+		this.port = port;
 	}
 
 	@Override
