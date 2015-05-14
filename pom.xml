@@ -3,10 +3,40 @@
 
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>com.ogp</groupId>
+    <groupId>io.github.antonkharenko</groupId>
     <artifactId>configurator</artifactId>
-    <version>1.0-SNAPSHOT</version>
+    <version>0.0.1</version>
     <packaging>jar</packaging>
+
+    <name>${project.groupId}:${project.artifactId}</name>
+    <description>Configuration Management Service based on ZooKeeper</description>
+    <inceptionYear>2015</inceptionYear>
+    <url>https://github.com/antonkharenko/configurator</url>
+
+    <licenses>
+        <license>
+            <name>The Apache License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git:git@github.com:antonkharenko/configurator.git</connection>
+        <developerConnection>scm:git:git@github.com:antonkharenko/configurator.git</developerConnection>
+        <url>git@github.com:antonkharenko/configurator.git</url>
+    </scm>
+
+    <developers>
+        <developer>
+            <id>antonkharenko</id>
+            <name>Anton Kharenko</name>
+            <email>a.kharenko@gmail.com</email>
+        </developer>
+        <developer>
+            <id>andreypanasenko</id>
+            <name>Andrey Panasenko</name>
+        </developer>
+    </developers>
 
     <properties>
         <junit.version>4.12</junit.version>
@@ -22,28 +52,13 @@
 
     <dependencies>
 
-        <!-- Spring Framework
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-core</artifactId>
-            <version>${spring.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-beans</artifactId>
-            <version>${spring.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.springframework</groupId>
-            <artifactId>spring-context</artifactId>
-            <version>${spring.version}</version>
-        </dependency>
-        -->
+        <!-- Jackson -->
 		<dependency>
 		    <groupId>com.fasterxml.jackson.core</groupId>
 		    <artifactId>jackson-databind</artifactId>
 		    <version>${jackson.version}</version>
 		</dependency>
+
         <!-- Guava -->
         <dependency>
             <groupId>com.google.guava</groupId>
