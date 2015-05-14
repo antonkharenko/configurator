@@ -1,20 +1,23 @@
 package com.ogp.configurator;
 
+import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
-import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
-public class ConfigApp {
 
+public class Configurator {
+	
 	private static final String ENVIRONMENT = "local";
 	private static final String CONFIG_TYPE = "server";
-
-	public static void main(String[] args) throws Exception {
-		// Start zookeeper client
+	
+	private static Random rnd = new Random(System.currentTimeMillis());
+	
+	public static void main(String[] args) {
 		String zookeeperConnectionString = "127.0.0.1:2181";
 		if (args.length < 1) {
 			System.out.println("Inter connection string.");
@@ -33,22 +36,23 @@ public class ConfigApp {
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
 
+		// Run some config modifications in separate thread
 		ExecutorService exec = Executors.newSingleThreadExecutor();
 		exec.submit(new Runnable() {
 			public void run() {
 				while(true) {
 					try {
 						// Insert new entity
+						ServerConfigEntity testConfiguration = new ServerConfigEntity(
+								String.valueOf(rnd.nextInt(1000000)), 
+								getRandomString(10), 
+								getRandomString(5), 
+								rnd.nextInt(10000));
+						configService.upsertConfigEntity(testConfiguration.getId(), testConfiguration);
 	
 						Thread.sleep(60000L);
+	
 						
-						List<Object> allEntities = configService.getAllConfigEntities(ServerConfigEntity.class);
-						System.out.printf("Total %d objects:\n", allEntities.size());
-						for (Object object : allEntities) {
-							System.out.printf("Object %s\n", object.toString());
-						}
-						System.out.println("----------------------------------------------------------");
-						System.out.println("");
 					} catch (Exception e) {
 						e.printStackTrace();
 					}
@@ -56,8 +60,19 @@ public class ConfigApp {
 			}
 		});
 
-		//Thread.sleep(5000);
-		//exec.shutdown();
+		
 	}
+
+	public static String getRandomString(int length) {
+       final String characters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJLMNOPQRSTUVWXYZ1234567890_";
+       StringBuilder result = new StringBuilder();
+       while(length > 0) {
+           Random rand = new Random();
+           result.append(characters.charAt(rand.nextInt(characters.length())));
+           length--;
+       }
+       return result.toString();
+    }
+	
 
 }
