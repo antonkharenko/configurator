@@ -1,4 +1,4 @@
-package com.ogp.configurator;
+package com.ogp.configurator.examples;
 
 /**
  * @author Anton Kharenko

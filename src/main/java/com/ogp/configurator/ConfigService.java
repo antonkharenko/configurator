@@ -4,7 +4,7 @@ import static com.google.common.base.Preconditions.*;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
-
+import com.ogp.configurator.serializer.ISerializer;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.imps.CuratorFrameworkState;
 import org.apache.curator.framework.recipes.cache.ChildData;
@@ -14,7 +14,6 @@ import org.apache.curator.framework.recipes.cache.TreeCacheListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -28,6 +27,7 @@ public class ConfigService {
 	private static final String CONFIG_BASE_PATH = "/config";
 
 	private final CuratorFramework zkClient;
+	private final ISerializer serializer;
 	private final Map<String, Class<Object>> configTypes;
 	private final Map<Class<Object>, String> classToType;
 	private final ConcurrentHashMap<Class<Object>, Map<String, Object>> configObjects;
@@ -37,14 +37,15 @@ public class ConfigService {
 	private boolean isInitialized; // switch to true after initialization complete, used during startup
 	private boolean isReadOnly; // Indicate treeCache state, is it available for write.
 
-	public static Builder newBuilder(CuratorFramework zkClient, String environment) {
-		return new Builder(zkClient, environment);
+	public static Builder newBuilder(CuratorFramework zkClient, ISerializer serializer, String environment) {
+		return new Builder(zkClient, serializer, environment);
 	}
 
 	private ConfigService(Builder builder) {
 		this.isInitialized = false;
 		this.isReadOnly = true;
 		this.zkClient = builder.zkClient;
+		this.serializer = builder.serializer;
 		this.configEnvironmentPath = CONFIG_BASE_PATH + "/" + builder.environment;
 		this.configTypes = ImmutableMap.copyOf(builder.configTypes);
 		this.configObjects = new ConcurrentHashMap<Class<Object>, Map<String,Object>>(configTypes.size(), 0.9f, 1);
@@ -63,61 +64,67 @@ public class ConfigService {
 		try {
 			configCache.start();
 		} catch (Exception e) {
-			e.printStackTrace();
+			logger.error("Failed to TreeCache", e);
 			throw new RuntimeException();
 		}
 		
 		configCache.getListenable().addListener(new TreeCacheListener() {
 			public void childEvent(CuratorFramework client, TreeCacheEvent event) throws Exception {
-				System.out.println("== Config event: type=" + event.getType() + " childData={" + childDataToString(event.getData()) + "}");
-				Class<Object> configEntityClass = childDataToClass(event.getData());
-				switch (event.getType()) {
-					case NODE_ADDED:
-					case NODE_UPDATED:
-						if (configEntityClass != null 
-										&& isInitialized) {
-							Object obj = JacksonSerializator.Deserialize(event.getData().getData(), configEntityClass);
-							String key = childDataToKey(event.getData());
-							Map<String, Object> entities = configObjects.putIfAbsent(configEntityClass, new HashMap<String, Object>());
-							synchronized (entities) {
-								entities.put(key, obj);
-							}							
-							System.out.printf("childEvent() key=%s put in cache, now %d classes and %d objects\n", 
-									key,
-									configObjects.size(),
-									configObjects.get(configEntityClass).size());
-						}
-						break;
-					case NODE_REMOVED:
-						if (configEntityClass != null
-										&& isInitialized) {
-							String key = childDataToKey(event.getData());
-							if (configObjects.containsKey(configEntityClass)) {
-								Map<String, Object> entities = configObjects.get(configEntityClass);
-								synchronized (entities) {
-									entities.remove(key);
-								}
-							}
-						}
-						break;
-					case INITIALIZED:
-						reloadConfigTree();
-						System.out.println("INITIALIZED, COMPLETE");
-						isInitialized = true;
-						isReadOnly = false;
-						break;
-					case CONNECTION_LOST:
-					case CONNECTION_SUSPENDED:
-						isReadOnly = true;
-						break;
-					case CONNECTION_RECONNECTED:
-						isReadOnly = false;
-						break;
-				}
+				logger.debug("== Config event: type=" + event.getType() + " childData={" + childDataToString(event.getData()) + "}");
+				processEvent(event);
 			}
 		});
 	}
 
+	private void processEvent(TreeCacheEvent event) throws Exception {
+		Class<Object> configEntityClass = childDataToClass(event.getData());
+		switch (event.getType()) {
+			case NODE_ADDED:
+			case NODE_UPDATED:
+				if (configEntityClass != null 
+								&& isInitialized) {
+					Object obj = serializer.Deserialize(event.getData().getData(), configEntityClass);
+					String key = childDataToKey(event.getData());
+					Map<String, Object> entities = configObjects.putIfAbsent(configEntityClass, new HashMap<String, Object>());
+					synchronized (entities) {
+						entities.put(key, obj);
+					}							
+					logger.trace("key=%s put/update in cache, now %d classes and %d objects of this key in cache\n", 
+							key,
+							configObjects.size(),
+							configObjects.get(configEntityClass).size());
+				}
+				break;
+			case NODE_REMOVED:
+				if (configEntityClass != null
+								&& isInitialized) {
+					String key = childDataToKey(event.getData());
+					if (configObjects.containsKey(configEntityClass)) {
+						Map<String, Object> entities = configObjects.get(configEntityClass);
+						synchronized (entities) {
+							entities.remove(key);
+						}
+					}
+				}
+				break;
+			case INITIALIZED:
+				reloadConfigTree();
+				logger.info("Initialization complete");
+				isInitialized = true;
+				isReadOnly = false;
+				break;
+			case CONNECTION_LOST:
+			case CONNECTION_SUSPENDED:
+				isReadOnly = true;
+				logger.info("Connection with ZooKeeper lost");
+				break;
+			case CONNECTION_RECONNECTED:
+				isReadOnly = false;
+				logger.info("Connection with ZooKeeper restored");
+				break;
+		}		
+	}
+	
 	private Class<Object> childDataToClass(ChildData childData) {
 		if (childData == null) {
 			return null;
@@ -168,7 +175,19 @@ public class ConfigService {
 
 	public <T> boolean upsertConfigEntity(String key, T config) throws Exception {
 		String type = classToType.get(config.getClass());
-		return upsertConfigEntity(type, key, JacksonSerializator.Serialize(config));
+		Class<Object> clazz = configTypes.get(type);
+		if (upsertConfigEntity(type, key, serializer.Serialize(config))) {
+			Map<String, Object> entities = configObjects.putIfAbsent(clazz, new HashMap<String, Object>());
+			synchronized (entities) {
+				entities.put(key, config);
+			}							
+			logger.trace("key=%s put/update in cache, now %d classes and %d objects of this key in cache\n", 
+					key,
+					configObjects.size(),
+					configObjects.get(clazz).size());
+			return true;
+		}
+		return false;
 	}
 
 	public boolean upsertConfigEntity(String type, String key, byte[] config) {
@@ -187,7 +206,7 @@ public class ConfigService {
 			} else {
 				zkClient.setData().forPath(configEntityPath, config);
 			}
-			System.out.println("upsertConfigEntity() add new ConfigEntity type,key=("+type+","+key+");");
+			logger.trace("upsertConfigEntity() add new ConfigEntity type,key=("+type+","+key+");");
 			return true;
 		} catch (Exception e) {
 			logger.error("Failed to store at '{}' config: {}", configEntityPath, config, e);
@@ -208,22 +227,6 @@ public class ConfigService {
 				return entities.get(key);
 			}
 		}
-
-		final String configEntityPath = configEntityPath(type, key);
-
-		byte[] configData = new byte[0];
-		try {
-			configData = zkClient.getData().forPath(configEntityPath);
-			Object obj = JacksonSerializator.Deserialize(configData, clazz);
-			Map<String, Object> entities = configObjects.putIfAbsent(clazz, new HashMap<String, Object>());
-			synchronized (entities) {
-				entities.put(key, obj);
-			}
-			return obj;
-		} catch (Exception e) {
-			e.printStackTrace(); //TODO
-		}
-
 		return null;
 	}
 
@@ -236,13 +239,13 @@ public class ConfigService {
 		final List<Object> configEntities = new ArrayList<>();
 		
 		if (configObjects.containsKey(classFromType)) {
-			System.out.printf("Config cache for class %s have %d elements\n", classFromType.toString(), configObjects.get(classFromType).size());
+			logger.debug("Config cache for class %s have %d elements\n", classFromType.toString(), configObjects.get(classFromType).size());
 			Map<String, Object> entities = configObjects.get(classFromType);
 			synchronized (entities) {
 				configEntities.addAll(entities.values());
 			}
 		} else {
-			System.out.printf("Class %s not found in cache\n", classFromType);
+			logger.debug("Class %s not found in cache\n", classFromType);
 		}
 		return configEntities;
 	}
@@ -266,7 +269,7 @@ public class ConfigService {
 				}
 			}
 		} catch (Exception e) {
-			e.printStackTrace(); // TODO
+			logger.error("Failed to delete at '{}'", configEntityPath, e);
 		}
 	}
 
@@ -284,17 +287,16 @@ public class ConfigService {
 					ChildData data = treeCacheObjects.get(key);
 					Object obj;
 					try {
-						obj = JacksonSerializator.Deserialize(data.getData(), clazz);
+						obj = serializer.Deserialize(data.getData(), clazz);
 						synchronized (entities) {
 							entities.put(key, obj);
 						}							
-						System.out.printf("reloadConfigTree() key=%s put in cache, now %d classes and %d objects\n", 
+						logger.debug("reloadConfigTree() key=%s put in cache, now %d classes and %d objects\n", 
 								key,
 								configObjects.size(),
 								configObjects.get(clazz).size());
-					} catch (IOException e) {
-						// TODO Auto-generated catch block
-						e.printStackTrace();
+					} catch (Exception e) {
+						logger.error("Failed to deserialize at path '{}', key %s", path, key, e);
 					}
 				}
 			}
@@ -325,13 +327,16 @@ public class ConfigService {
 		private final CuratorFramework zkClient;
 		private final String environment;
 		private final Map<String, Class<Object>> configTypes = new HashMap<>();
+		private final ISerializer serializer;
 
-		public Builder(CuratorFramework zkClient, String environment) {
+		public Builder(CuratorFramework zkClient, ISerializer serializer, String environment) {
 			checkNotNull(zkClient);
+			checkNotNull(serializer);
 			checkArgument(zkClient.getState() == CuratorFrameworkState.STARTED);
 			checkArgument(!Strings.isNullOrEmpty(environment));
 
 			this.zkClient = zkClient;
+			this.serializer = serializer;
 			this.environment = environment;
 		}
 
