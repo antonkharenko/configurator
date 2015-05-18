@@ -5,6 +5,7 @@ import static com.google.common.base.Preconditions.*;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
 import com.ogp.configurator.serializer.ISerializer;
+
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.imps.CuratorFrameworkState;
 import org.apache.curator.framework.recipes.cache.ChildData;
@@ -36,6 +37,7 @@ public class ConfigService {
 	
 	private boolean isInitialized; // switch to true after initialization complete, used during startup
 	private boolean isReadOnly; // Indicate treeCache state, is it available for write.
+	private final Object syncReady = new Object();
 
 	public static Builder newBuilder(CuratorFramework zkClient, ISerializer serializer, String environment) {
 		return new Builder(zkClient, serializer, environment);
@@ -112,6 +114,9 @@ public class ConfigService {
 				logger.info("Initialization complete");
 				isInitialized = true;
 				isReadOnly = false;
+				synchronized (syncReady) {
+					syncReady.notify();
+				}
 				break;
 			case CONNECTION_LOST:
 			case CONNECTION_SUSPENDED:
@@ -120,6 +125,9 @@ public class ConfigService {
 				break;
 			case CONNECTION_RECONNECTED:
 				isReadOnly = false;
+				synchronized (syncReady) {
+					syncReady.notify();
+				}
 				logger.info("Connection with ZooKeeper restored");
 				break;
 		}		
@@ -173,6 +181,18 @@ public class ConfigService {
 		}
 	}
 
+	public void BlockUntilReady() {
+		synchronized (syncReady) {
+			while (!(isInitialized && !isReadOnly)) {
+				try {
+					syncReady.wait();
+				} catch (InterruptedException e) {
+					
+				}
+			}
+		}
+	}
+	
 	public <T> boolean upsertConfigEntity(String key, T config) throws Exception {
 		String type = classToType.get(config.getClass());
 		Class<Object> clazz = configTypes.get(type);
@@ -190,7 +210,7 @@ public class ConfigService {
 		return false;
 	}
 
-	public boolean upsertConfigEntity(String type, String key, byte[] config) {
+	private boolean upsertConfigEntity(String type, String key, byte[] config) {
 		checkArgument(!Strings.isNullOrEmpty(type));
 		checkArgument(!Strings.isNullOrEmpty(key));
 		checkArgument(config.length > 0);
@@ -214,7 +234,8 @@ public class ConfigService {
 		}
 	}
 
-	public Object getConfigEntity(Class<Object> clazz, String key) {
+	@SuppressWarnings("unchecked")
+	public <T> T getConfigEntity(Class<T> clazz, String key) {
 		String type = classToType.get(clazz);
 
 		checkArgument(!Strings.isNullOrEmpty(type));
@@ -224,7 +245,7 @@ public class ConfigService {
 		if (configObjects.containsKey(clazz)) {
 			Map<String, Object> entities = configObjects.get(clazz);
 			synchronized (entities) {
-				return entities.get(key);
+				return (T)entities.get(key);
 			}
 		}
 		return null;
@@ -250,7 +271,7 @@ public class ConfigService {
 		return configEntities;
 	}
 	
-	public void deleteConfigEntity(Class<Object> clazz, String key) {
+	public <T> void deleteConfigEntity(Class<T> clazz, String key) {
 		String type = classToType.get(clazz);
 		checkArgument(!Strings.isNullOrEmpty(type));
 		
