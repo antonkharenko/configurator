@@ -81,7 +81,7 @@ public class ConfigServiceClusterTest {
 		upsertConfigService = ConfigService.newBuilder(upsertClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
-		upsertConfigService.BlockUntilReady();
+		upsertConfigService.awaitConnected();
 		
 		getClient = CuratorFrameworkFactory.newClient(getServerConnString, retryPolicy);
 		getClient.start();
@@ -89,7 +89,7 @@ public class ConfigServiceClusterTest {
 		getConfigService = ConfigService.newBuilder(upsertClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
-		getConfigService.BlockUntilReady();
+		getConfigService.awaitConnected();
 		
 	}
 

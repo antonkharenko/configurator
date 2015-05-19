@@ -3,6 +3,7 @@ package com.ogp.configurator;
 import static com.google.common.base.Preconditions.*;
 
 import com.google.common.base.Strings;
+import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
 import com.ogp.configurator.serializer.ISerializer;
 
@@ -17,6 +18,8 @@ import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Anton Kharenko
@@ -37,7 +40,7 @@ public class ConfigService {
 	
 	private boolean isInitialized; // switch to true after initialization complete, used during startup
 	private boolean isReadOnly; // Indicate treeCache state, is it available for write.
-	private final Object syncReady = new Object();
+	private CountDownLatch syncReady; 
 
 	public static Builder newBuilder(CuratorFramework zkClient, ISerializer serializer, String environment) {
 		return new Builder(zkClient, serializer, environment);
@@ -51,7 +54,8 @@ public class ConfigService {
 		this.configEnvironmentPath = CONFIG_BASE_PATH + "/" + builder.environment;
 		this.configTypes = ImmutableMap.copyOf(builder.configTypes);
 		this.configObjects = new ConcurrentHashMap<Class<Object>, Map<String,Object>>(configTypes.size(), 0.9f, 1);
-
+		this.syncReady = new CountDownLatch(1);
+		
 		// TODO: refactoring
 		Map<Class<Object>, String> classToType = new HashMap<>(configTypes.size());
 		for (Map.Entry<String, Class<Object>> typeEntry : configTypes.entrySet()) {
@@ -67,7 +71,7 @@ public class ConfigService {
 			configCache.start();
 		} catch (Exception e) {
 			logger.error("Failed to TreeCache", e);
-			throw new RuntimeException();
+			Throwables.propagate(e);
 		}
 		
 		configCache.getListenable().addListener(new TreeCacheListener() {
@@ -85,13 +89,13 @@ public class ConfigService {
 			case NODE_UPDATED:
 				if (configEntityClass != null 
 								&& isInitialized) {
-					Object obj = serializer.Deserialize(event.getData().getData(), configEntityClass);
+					Object obj = serializer.deserialize(event.getData().getData(), configEntityClass);
 					String key = childDataToKey(event.getData());
 					Map<String, Object> entities = configObjects.putIfAbsent(configEntityClass, new HashMap<String, Object>());
 					synchronized (entities) {
 						entities.put(key, obj);
 					}							
-					logger.trace("key=%s put/update in cache, now %d classes and %d objects of this key in cache\n", 
+					logger.trace("key={} put/update in cache, now {} classes and {} objects of this key in cache\n", 
 							key,
 							configObjects.size(),
 							configObjects.get(configEntityClass).size());
@@ -114,20 +118,17 @@ public class ConfigService {
 				logger.info("Initialization complete");
 				isInitialized = true;
 				isReadOnly = false;
-				synchronized (syncReady) {
-					syncReady.notify();
-				}
+				syncReady.countDown();
 				break;
 			case CONNECTION_LOST:
 			case CONNECTION_SUSPENDED:
 				isReadOnly = true;
+				syncReady = new CountDownLatch(1);
 				logger.info("Connection with ZooKeeper lost");
 				break;
 			case CONNECTION_RECONNECTED:
 				isReadOnly = false;
-				synchronized (syncReady) {
-					syncReady.notify();
-				}
+				syncReady.countDown();
 				logger.info("Connection with ZooKeeper restored");
 				break;
 		}		
@@ -181,27 +182,23 @@ public class ConfigService {
 		}
 	}
 
-	public void BlockUntilReady() {
-		synchronized (syncReady) {
-			while (!(isInitialized && !isReadOnly)) {
-				try {
-					syncReady.wait();
-				} catch (InterruptedException e) {
-					
-				}
-			}
-		}
+	public void awaitConnected() throws InterruptedException {
+		syncReady.await();
+	}
+	
+	public void awaitConnected(long timeout, TimeUnit unit) throws InterruptedException {
+		syncReady.await(timeout, unit);
 	}
 	
 	public <T> boolean upsertConfigEntity(String key, T config) throws Exception {
 		String type = classToType.get(config.getClass());
 		Class<Object> clazz = configTypes.get(type);
-		if (upsertConfigEntity(type, key, serializer.Serialize(config))) {
+		if (upsertConfigEntity(type, key, serializer.serialize(config))) {
 			Map<String, Object> entities = configObjects.putIfAbsent(clazz, new HashMap<String, Object>());
 			synchronized (entities) {
 				entities.put(key, config);
 			}							
-			logger.trace("key=%s put/update in cache, now %d classes and %d objects of this key in cache\n", 
+			logger.trace("key={} put/update in cache, now {} classes and {} objects of this key in cache\n", 
 					key,
 					configObjects.size(),
 					configObjects.get(clazz).size());
@@ -260,13 +257,13 @@ public class ConfigService {
 		final List<Object> configEntities = new ArrayList<>();
 		
 		if (configObjects.containsKey(classFromType)) {
-			logger.debug("Config cache for class %s have %d elements\n", classFromType.toString(), configObjects.get(classFromType).size());
+			logger.debug("Config cache for class {} have {} elements\n", classFromType.toString(), configObjects.get(classFromType).size());
 			Map<String, Object> entities = configObjects.get(classFromType);
 			synchronized (entities) {
 				configEntities.addAll(entities.values());
 			}
 		} else {
-			logger.debug("Class %s not found in cache\n", classFromType);
+			logger.debug("Class {} not found in cache\n", classFromType);
 		}
 		return configEntities;
 	}
@@ -308,16 +305,16 @@ public class ConfigService {
 					ChildData data = treeCacheObjects.get(key);
 					Object obj;
 					try {
-						obj = serializer.Deserialize(data.getData(), clazz);
+						obj = serializer.deserialize(data.getData(), clazz);
 						synchronized (entities) {
 							entities.put(key, obj);
 						}							
-						logger.debug("reloadConfigTree() key=%s put in cache, now %d classes and %d objects\n", 
+						logger.debug("reloadConfigTree() key={} put in cache, now {} classes and {} objects\n", 
 								key,
 								configObjects.size(),
 								configObjects.get(clazz).size());
 					} catch (Exception e) {
-						logger.error("Failed to deserialize at path '{}', key %s", path, key, e);
+						logger.error("Failed to deserialize at path '{}', key {}", path, key, e);
 					}
 				}
 			}

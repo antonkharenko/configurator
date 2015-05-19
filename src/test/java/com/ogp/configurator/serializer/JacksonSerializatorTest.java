@@ -35,13 +35,13 @@ public class JacksonSerializatorTest {
 	}
 
 	/**
-	 * Test method for {@link com.ogp.configurator.serializer.JacksonSerializator#Serialize(java.lang.Object)}.
+	 * Test method for {@link com.ogp.configurator.serializer.JacksonSerializator#serialize(java.lang.Object)}.
 	 */
 	@Test
 	public void testSerialize() {
 		ServerConfigEntity ent = new ServerConfigEntity("10", "name", "host", 10);
 		try {
-			byte[] res = serializer.Serialize(ent);
+			byte[] res = serializer.serialize(ent);
 			assertEquals(res.length, serialize_result.length);
 			assertArrayEquals(serialize_result, res);
 		} catch (Exception e) {
@@ -50,12 +50,12 @@ public class JacksonSerializatorTest {
 	}
 
 	/**
-	 * Test method for {@link com.ogp.configurator.serializer.JacksonSerializator#Deserialize(byte[], java.lang.Class)}.
+	 * Test method for {@link com.ogp.configurator.serializer.JacksonSerializator#deserialize(byte[], java.lang.Class)}.
 	 */
 	@Test
 	public void testDeserialize() {
 		try {
-			ServerConfigEntity ent = serializer.Deserialize(serialize_result, ServerConfigEntity.class);
+			ServerConfigEntity ent = serializer.deserialize(serialize_result, ServerConfigEntity.class);
 			assertEquals("10", ent.getId());
 			assertEquals("name", ent.getName());
 			assertEquals("host", ent.getHost());

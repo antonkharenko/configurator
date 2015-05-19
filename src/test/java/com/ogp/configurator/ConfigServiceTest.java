@@ -69,7 +69,7 @@ public class ConfigServiceTest {
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();
-		configService.BlockUntilReady();		
+		configService.awaitConnected();		
 	}
 
 	/**
