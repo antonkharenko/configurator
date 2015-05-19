@@ -1,5 +1,6 @@
-package com.ogp.configurator;
+package com.ogp.configurator.examples;
 
+import java.math.BigDecimal;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -9,11 +10,15 @@ import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 
+import com.ogp.configurator.ConfigService;
+import com.ogp.configurator.serializer.JacksonSerializator;
+
 
 public class Configurator {
 	
 	private static final String ENVIRONMENT = "local";
 	private static final String CONFIG_TYPE = "server";
+	private static final String RATES_TYPE = "FixedCurrencyRates";
 	
 	private static Random rnd = new Random(System.currentTimeMillis());
 	
@@ -32,11 +37,27 @@ public class Configurator {
 		client.start();
 
 		// Init config service
-		final ConfigService configService = ConfigService.newBuilder(client, ENVIRONMENT)
+		final ConfigService configService = ConfigService.newBuilder(client, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
+				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();
 
 		// Run some config modifications in separate thread
+		
+		FixedCurrencyRates rates = new FixedCurrencyRates("RATES");
+		rates
+			.addRate("USD", new BigDecimal(1.01))
+			.addRate("UAH", new BigDecimal(21.11))
+			.addRate("EUR", new BigDecimal(1.31));
+		try {
+			while(!configService.upsertConfigEntity(rates.getKey(), rates)) {
+				Thread.sleep(500);
+			}
+		} catch (Exception e1) {
+			// TODO Auto-generated catch block
+			e1.printStackTrace();
+		}
+		
 		ExecutorService exec = Executors.newSingleThreadExecutor();
 		exec.submit(new Runnable() {
 			public void run() {
@@ -49,6 +70,8 @@ public class Configurator {
 								getRandomString(5), 
 								rnd.nextInt(10000));
 						configService.upsertConfigEntity(testConfiguration.getId(), testConfiguration);
+						
+						
 	
 						Thread.sleep(60000L);
 	
