@@ -21,7 +21,7 @@ public interface IConfigurationManagement {
 	 * @throws InvalidAccessException if not enough rights for write operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
-	<T> void save(String key, T config);
+	<T> void save(String key, T config) throws ConnectionLossException;
 
 	/**
 	 * Deletes configuration object of the given type and with the given key.
@@ -33,7 +33,7 @@ public interface IConfigurationManagement {
 	 * @throws InvalidAccessException if not enough rights for delete operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
-	<T> void delete(Class<T> type, String key);
+	<T> void delete(Class<T> type, String key) throws ConnectionLossException;
 
 	/**
 	 * Returns configuration object of the given type under the given key or {@code null} if such
