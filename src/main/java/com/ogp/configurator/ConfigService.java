@@ -53,7 +53,7 @@ public class ConfigService {
 		this.serializer = builder.serializer;
 		this.configEnvironmentPath = CONFIG_BASE_PATH + "/" + builder.environment;
 		this.configTypes = ImmutableMap.copyOf(builder.configTypes);
-		this.configObjects = new ConcurrentHashMap<Class<Object>, Map<String,Object>>(configTypes.size(), 0.9f, 1);
+		this.configObjects = new ConcurrentHashMap<>(configTypes.size(), 0.9f, 1);
 		this.syncReady = new CountDownLatch(1);
 		
 		// TODO: refactoring
@@ -309,7 +309,7 @@ public class ConfigService {
 						synchronized (entities) {
 							entities.put(key, obj);
 						}							
-						logger.debug("reloadConfigTree() key={} put in cache, now {} classes and {} objects\n", 
+						logger.debug("reloadConfigTree() key={} put in cache, now {} classes and {} objects\n",
 								key,
 								configObjects.size(),
 								configObjects.get(clazz).size());
@@ -320,6 +320,7 @@ public class ConfigService {
 			}
 		}
 	}
+
 	private String configEntityPath(String type, String key) {
 		return configTypePath(type) + "/" + key;
 	}
@@ -328,7 +329,7 @@ public class ConfigService {
 		return configEnvironmentPath + "/" + type;
 	}
 
-	private String configTypePathForClass(Class<? extends Object> clazz) {
+	private String configTypePathForClass(Class<?> clazz) {
 		return configEnvironmentPath + "/" + classToType.get(clazz);
 	}
 	
@@ -359,7 +360,7 @@ public class ConfigService {
 		}
 
 		@SuppressWarnings("unchecked")
-		public Builder registerConfigType(String type, Class<? extends Object> typeClass) {
+		public Builder registerConfigType(String type, Class<?> typeClass) {
 			configTypes.put(type, (Class<Object>)typeClass);
 			return this;
 		}

@@ -48,6 +48,7 @@
         <disruptor.version>3.3.0</disruptor.version>
         <log4j.version>2.1</log4j.version>
         <jackson.version>2.5.3</jackson.version>
+        <rxjava.version>1.0.6</rxjava.version>
     </properties>
 
     <distributionManagement>
@@ -97,6 +98,13 @@
                     <artifactId>log4j</artifactId>
                 </exclusion>
             </exclusions>
+        </dependency>
+
+        <!-- RxJava -->
+        <dependency>
+            <groupId>io.reactivex</groupId>
+            <artifactId>rxjava</artifactId>
+            <version>${rxjava.version}</version>
         </dependency>
 
         <!-- Logging -->
