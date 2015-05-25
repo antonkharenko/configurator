@@ -144,7 +144,7 @@ public class ConfigServiceInitializationTest {
 	public void testInitializationService() throws Exception {
 		assertNotNull(saveConfigService);
 		
-		final int NUMBER_OF_ENTITIES = 10000;
+		final int NUMBER_OF_ENTITIES = 1000;
 		
 		try {
 			for(int i=0;i<NUMBER_OF_ENTITIES;i++) {
@@ -196,6 +196,8 @@ public class ConfigServiceInitializationTest {
 		assertTrue(waitInitObj.await(5, TimeUnit.MINUTES));
 		
 		assertEquals(NUMBER_OF_ENTITIES, receivedEvents.size());
+		
+		logger.info("Test Initialization complete, got {} updates", receivedEvents.size());
 	}
 	
 	private ServerConfigEntity getServerConfigEntity(int i) {
