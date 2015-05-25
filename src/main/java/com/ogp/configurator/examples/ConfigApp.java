@@ -39,6 +39,8 @@ public class ConfigApp {
 				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();
 
+		configService.start();
+		
 		ExecutorService exec = Executors.newSingleThreadExecutor();
 		exec.submit(new Runnable() {
 			public void run() {
@@ -48,7 +50,7 @@ public class ConfigApp {
 	
 						Thread.sleep(60000L);
 						
-						List<Object> allEntities = configService.getAllConfigEntities(ServerConfigEntity.class);
+						List<ServerConfigEntity> allEntities = configService.list(ServerConfigEntity.class);
 						System.out.printf("Total %d objects:\n", allEntities.size());
 						for (Object object : allEntities) {
 							System.out.printf("Object %s\n", object.toString());

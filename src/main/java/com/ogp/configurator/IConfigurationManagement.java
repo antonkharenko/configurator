@@ -5,10 +5,19 @@ import rx.Observable;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import com.ogp.configurator.serializer.SerializationException;
+
 /**
  * @author Anton Kharenko
  */
 public interface IConfigurationManagement {
+
+	/**
+	 * Start configuration management service and blocks until
+	 * all configuration received and cached in local cache tree.
+	 * @throws ConnectionLossException if not connected to the configuration storage.
+	 */
+	void start() throws ConnectionLossException;
 
 	/**
 	 * Saves given configuration object at given key. If object with such key exists it
@@ -20,6 +29,7 @@ public interface IConfigurationManagement {
 	 * @throws ConnectionLossException if not connected to the configuration storage.
 	 * @throws InvalidAccessException if not enough rights for write operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
+	 * @throws SerializationException Runtime exception if something wrong happened in serializer. 
 	 */
 	<T> void save(String key, T config) throws ConnectionLossException;
 

@@ -1,8 +1,26 @@
 package com.ogp.configurator.serializer;
 
+
+/**
+ * @author Andriy Panasenko
+ */
 public interface ISerializer {
 
-	public byte[] serialize(Object obj) throws Exception;
+	/**
+	 * Serialize given object to byte[]
+	 *
+	 * @param <T> Serialization Object
+	 * @return byte[] serialized byte array
+	 * @throws SerializationException Runtime exception if something wrong happened in serializer.
+	 */
+	public <T> byte[] serialize(T obj);
 	
-	public <T> T deserialize(byte[] array, Class<T> clazz) throws Exception;
+	/**
+	 * Deserialize given byte[] array to Object of Class<T>
+	 *
+	 * @param byte[] byte array
+	 * @param Class <T> of Deserialization Object
+	 * @throws SerializationException Runtime exception if something wrong happened in serializer.
+	 */
+	public <T> T deserialize(byte[] array, Class<T> clazz);
 }

@@ -11,6 +11,7 @@ import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 
 import com.ogp.configurator.ConfigService;
+import com.ogp.configurator.ConnectionLossException;
 import com.ogp.configurator.serializer.JacksonSerializator;
 
 
@@ -42,6 +43,12 @@ public class Configurator {
 				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();
 
+		try {
+			configService.start();
+		} catch (ConnectionLossException e2) {
+			// TODO Auto-generated catch block
+			e2.printStackTrace();
+		}
 		// Run some config modifications in separate thread
 		
 		FixedCurrencyRates rates = new FixedCurrencyRates("RATES");
@@ -50,9 +57,11 @@ public class Configurator {
 			.addRate("UAH", new BigDecimal(21.11))
 			.addRate("EUR", new BigDecimal(1.31));
 		try {
-			while(!configService.upsertConfigEntity(rates.getKey(), rates)) {
-				Thread.sleep(500);
-			}
+			if (!configService.isConnected())
+				configService.awaitConnected();
+			
+			configService.save(rates.getKey(), rates);
+
 		} catch (Exception e1) {
 			// TODO Auto-generated catch block
 			e1.printStackTrace();
@@ -64,12 +73,15 @@ public class Configurator {
 				while(true) {
 					try {
 						// Insert new entity
+						if (!configService.isConnected())
+							configService.awaitConnected();
+
 						ServerConfigEntity testConfiguration = new ServerConfigEntity(
 								String.valueOf(rnd.nextInt(1000000)), 
 								getRandomString(10), 
 								getRandomString(5), 
 								rnd.nextInt(10000));
-						configService.upsertConfigEntity(testConfiguration.getId(), testConfiguration);
+						configService.save(testConfiguration.getId(), testConfiguration);
 						
 						
 	

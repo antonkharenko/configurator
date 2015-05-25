@@ -4,9 +4,13 @@
 package com.ogp.configurator;
 
 import static org.junit.Assert.*;
+
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
@@ -14,11 +18,14 @@ import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.curator.test.TestingServer;
 import org.junit.After;
-import org.junit.AfterClass;
 import org.junit.Before;
-import org.junit.BeforeClass;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
+import rx.Observer;
+
+import com.ogp.configurator.ConfigurationUpdateEvent.UpdateType;
 import com.ogp.configurator.examples.FixedCurrencyRates;
 import com.ogp.configurator.examples.ServerConfigEntity;
 import com.ogp.configurator.serializer.JacksonSerializator;
@@ -28,6 +35,9 @@ import com.ogp.configurator.serializer.JacksonSerializator;
  *
  */
 public class ConfigServiceTest {
+	
+	private static final Logger logger = LoggerFactory.getLogger(ConfigServiceTest.class);
+	
 	private static final String ENVIRONMENT = "local";
 	private static final String CONFIG_TYPE = "server";
 	private static final String RATES_TYPE = "FixedCurrencyRates";
@@ -40,36 +50,26 @@ public class ConfigServiceTest {
 	/**
 	 * @throws java.lang.Exception
 	 */
-	@BeforeClass
-	public static void setUpBeforeClass() throws Exception {
-		curator = new TestingServer(true);
-		retryPolicy = new ExponentialBackoffRetry(1000, 3);
-	}
-
-	/**
-	 * @throws java.lang.Exception
-	 */
-	@AfterClass
-	public static void tearDownAfterClass() throws Exception {
-		curator.stop();
-		curator.close();
-	}
-
-	/**
-	 * @throws java.lang.Exception
-	 */
 	@Before
 	public void setUp() throws Exception {
+		logger.info("ConfigServiceTest() -- setUp() starting....");
+		curator = new TestingServer(true);
+		retryPolicy = new ExponentialBackoffRetry(1000, 3);
+		
 		assertNotNull(curator);
 		assertNotNull(retryPolicy);
 		client = CuratorFrameworkFactory.newClient(curator.getConnectString(), retryPolicy);
+		assertNotNull(client);
 		client.start();
 		client.blockUntilConnected();
 		configService = ConfigService.newBuilder(client, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();
-		configService.awaitConnected();		
+
+		assertNotNull(configService);
+		configService.start();		
+		logger.info("ConfigServiceTest() -- setUp() starting.... Done.");
 	}
 
 	/**
@@ -77,50 +77,87 @@ public class ConfigServiceTest {
 	 */
 	@After
 	public void tearDown() throws Exception {
+		logger.info("ConfigServiceTest() -- tearDown() starting....");
 		client.close();
 		client = null;
 		configService = null;
+		curator.stop();
+		curator.close();
+		curator = null;
+		logger.info("ConfigServiceTest() -- tearDown() starting....Done.");
 	}
 
 	/**
-	 * Test method for {@link com.ogp.configurator.ConfigService#upsertConfigEntity(java.lang.String, java.lang.Object)}.
+	 * Test method for {@link com.ogp.configurator.ConfigService#save(java.lang.String, java.lang.Object)}.
 	 */
 	@Test
-	public void testUpsertConfigEntityStringT() {
+	public void testSaveStringT() {
+		logger.info("ConfigServiceTest() -- testSaveStringT() starting....");
 		assertNotNull(configService);
+		final CountDownLatch waitSaveObj = new CountDownLatch(1);
+		final List<ConfigurationUpdateEvent> receivedEvents = new ArrayList<ConfigurationUpdateEvent>();
+		
+		configService.listenUpdates().subscribe(new Observer<ConfigurationUpdateEvent>() {
+
+			@Override
+			public void onCompleted() {
+				
+			}
+
+			@Override
+			public void onError(Throwable e) {
+				
+			}
+
+			@Override
+			public void onNext(ConfigurationUpdateEvent t) {
+				logger.debug("{}: type={}",t.toString(),t.getUpdateType());
+				receivedEvents.add(t);
+				waitSaveObj.countDown();
+			}
+		});
+		
 		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
 		try {
-			assertTrue(configService.upsertConfigEntity(testConfiguration.getId(), testConfiguration));
+			configService.save(testConfiguration.getId(), testConfiguration);
 		} catch (Exception e) {
 			fail(e.toString());
+		}
+		
+		try {
+			assertTrue(waitSaveObj.await(1, TimeUnit.MINUTES));
+			assertEquals(1, receivedEvents.size());
+			assertTrue(UpdateType.ADDED == receivedEvents.get(0).getUpdateType());
+			assertEquals(testConfiguration, receivedEvents.get(0).getNewValue());
+		} catch (InterruptedException e1) {
+			fail(e1.toString());
 		}
 	}
 
 	/**
-	 * Test method for {@link com.ogp.configurator.ConfigService#getConfigEntity(java.lang.Class, java.lang.String)}.
+	 * Test method for {@link com.ogp.configurator.ConfigService#get(java.lang.Class, java.lang.String)}.
 	 */
 	@Test
-	public void testGetConfigEntity() {
+	public void testGet() {
+		logger.info("ConfigServiceTest() -- testGet() starting....");
 		assertNotNull(configService);
 		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
 		try {
-			assertTrue(configService.upsertConfigEntity(testConfiguration.getId(), testConfiguration));
-			ServerConfigEntity gotEntity = configService.getConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
+			configService.save(testConfiguration.getId(), testConfiguration);
+			ServerConfigEntity gotEntity = configService.get(ServerConfigEntity.class, testConfiguration.getId());
 			assertNotNull(gotEntity);
-			assertEquals("10", gotEntity.getId());
-			assertEquals("name", gotEntity.getName());
-			assertEquals("host", gotEntity.getHost());
-			assertEquals(10, gotEntity.getPort());
+			assertEquals(testConfiguration, gotEntity);
 		} catch (Exception e) {
 			fail(e.toString());
 		}
 	}
 
 	/**
-	 * Test method for {@link com.ogp.configurator.ConfigService#getAllConfigEntities(java.lang.Class)}.
+	 * Test method for {@link com.ogp.configurator.ConfigService#list(java.lang.Class)}.
 	 */
 	@Test
-	public void testGetAllConfigEntities() {
+	public void testList() {
+		logger.info("ConfigServiceTest() -- testList() starting....");
 		assertNotNull(configService);
 		ServerConfigEntity testConfiguration1 = new ServerConfigEntity("11","name1","host1",11);
 		ServerConfigEntity testConfiguration2 = new ServerConfigEntity("12","name2","host2",12);
@@ -135,13 +172,17 @@ public class ConfigServiceTest {
 			.addRate("UAH", new BigDecimal(22.11))
 			.addRate("EUR", new BigDecimal(2.31));
 		try {
-			assertTrue(configService.upsertConfigEntity(testConfiguration1.getId(), testConfiguration1));
-			assertTrue(configService.upsertConfigEntity(testConfiguration2.getId(), testConfiguration2));
-			assertTrue(configService.upsertConfigEntity(rates1.getKey(), rates1));
-			assertTrue(configService.upsertConfigEntity(rates2.getKey(), rates2));
+			configService.save(testConfiguration1.getId(), testConfiguration1);
+			configService.save(testConfiguration2.getId(), testConfiguration2);
+			configService.save(rates1.getKey(), rates1);
+			configService.save(rates2.getKey(), rates2);
 			
-			List<Object> confEnts = configService.getAllConfigEntities(ServerConfigEntity.class);
+			List<ServerConfigEntity> confEnts = configService.list(ServerConfigEntity.class);
 			assertNotNull(confEnts);
+			logger.debug("---------------------------------------------------------------------");
+			for (ServerConfigEntity serverConfigEntity : confEnts) {
+				logger.debug("Entity: {}", serverConfigEntity.toString());
+			}
 			assertEquals(2, confEnts.size());
 			for (Object ent : confEnts) {
 				ServerConfigEntity e = (ServerConfigEntity)ent;
@@ -158,7 +199,7 @@ public class ConfigServiceTest {
 				}
 			}
 			
-			List<Object> rates = configService.getAllConfigEntities(FixedCurrencyRates.class);
+			List<FixedCurrencyRates> rates = configService.list(FixedCurrencyRates.class);
 			assertNotNull(confEnts);
 			assertEquals(2, confEnts.size());
 			for (Object rate : rates) {
@@ -194,19 +235,24 @@ public class ConfigServiceTest {
 	}
 
 	/**
-	 * Test method for {@link com.ogp.configurator.ConfigService#deleteConfigEntity(java.lang.Class, java.lang.String)}.
+	 * Test method for {@link com.ogp.configurator.ConfigService#delete(java.lang.Class, java.lang.String)}.
 	 */
 	@Test
-	public void testDeleteConfigEntity() {
+	public void testDelete() {
+		logger.info("ConfigServiceTest() -- testDelete() starting....");
 		assertNotNull(configService);
 		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
 		try {
-			assertTrue(configService.upsertConfigEntity(testConfiguration.getId(), testConfiguration));
+			configService.save(testConfiguration.getId(), testConfiguration);
 		} catch (Exception e) {
 			fail(e.toString());
 		}
-		configService.deleteConfigEntity(ServerConfigEntity.class, "10");
-		ServerConfigEntity delEntity = configService.getConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
+		try {
+			configService.delete(ServerConfigEntity.class, "10");
+		} catch (ConnectionLossException e) {
+			fail(e.toString());
+		}
+		ServerConfigEntity delEntity = configService.get(ServerConfigEntity.class, testConfiguration.getId());
 		assertNull(delEntity);
 	}
 

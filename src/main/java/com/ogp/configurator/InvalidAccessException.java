@@ -8,6 +8,11 @@ package com.ogp.configurator;
  */
 public class InvalidAccessException extends RuntimeException {
 
+	/**
+	 *
+	 */
+	private static final long serialVersionUID = -7754299105576515214L;
+
 	public InvalidAccessException(String message) {
 		super(message);
 	}

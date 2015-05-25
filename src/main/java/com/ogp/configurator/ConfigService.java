@@ -3,8 +3,8 @@ package com.ogp.configurator;
 import static com.google.common.base.Preconditions.*;
 
 import com.google.common.base.Strings;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableMap;
+import com.ogp.configurator.ConfigurationUpdateEvent.UpdateType;
 import com.ogp.configurator.serializer.ISerializer;
 
 import org.apache.curator.framework.CuratorFramework;
@@ -16,15 +16,20 @@ import org.apache.curator.framework.recipes.cache.TreeCacheListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import rx.Observable;
+import rx.subjects.PublishSubject;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * @author Anton Kharenko
  */
-public class ConfigService {
+public class ConfigService implements IConfigurationManagement {
 
 	private static final Logger logger = LoggerFactory.getLogger(ConfigService.class);
 
@@ -38,9 +43,15 @@ public class ConfigService {
 	private final String configEnvironmentPath;
 	private final TreeCache configCache;
 	
+	private final PublishSubject<ConfigurationUpdateEvent> subject;
+	
 	private boolean isInitialized; // switch to true after initialization complete, used during startup
 	private boolean isReadOnly; // Indicate treeCache state, is it available for write.
-	private CountDownLatch syncReady; 
+	
+	private final CountDownLatch syncInitialization;
+	private volatile int connectionPhase;
+	private Phaser connectionPhaser;
+	
 
 	public static Builder newBuilder(CuratorFramework zkClient, ISerializer serializer, String environment) {
 		return new Builder(zkClient, serializer, environment);
@@ -54,7 +65,10 @@ public class ConfigService {
 		this.configEnvironmentPath = CONFIG_BASE_PATH + "/" + builder.environment;
 		this.configTypes = ImmutableMap.copyOf(builder.configTypes);
 		this.configObjects = new ConcurrentHashMap<>(configTypes.size(), 0.9f, 1);
-		this.syncReady = new CountDownLatch(1);
+		this.subject = PublishSubject.create();
+		this.syncInitialization = new CountDownLatch(1);
+		this.connectionPhase = 0;
+		this.connectionPhaser = new Phaser(1);
 		
 		// TODO: refactoring
 		Map<Class<Object>, String> classToType = new HashMap<>(configTypes.size());
@@ -67,12 +81,6 @@ public class ConfigService {
 		initPaths();
 
 		configCache = new TreeCache(zkClient, configEnvironmentPath);
-		try {
-			configCache.start();
-		} catch (Exception e) {
-			logger.error("Failed to TreeCache", e);
-			Throwables.propagate(e);
-		}
 		
 		configCache.getListenable().addListener(new TreeCacheListener() {
 			public void childEvent(CuratorFramework client, TreeCacheEvent event) throws Exception {
@@ -82,19 +90,28 @@ public class ConfigService {
 		});
 	}
 
+	//TODO check if event don't lost during initialization, remove isInitialized check and reloadConfigTree
 	private void processEvent(TreeCacheEvent event) throws Exception {
 		Class<Object> configEntityClass = childDataToClass(event.getData());
+		boolean isAdd = false;
 		switch (event.getType()) {
 			case NODE_ADDED:
+				isAdd = true;
 			case NODE_UPDATED:
 				if (configEntityClass != null 
 								&& isInitialized) {
-					Object obj = serializer.deserialize(event.getData().getData(), configEntityClass);
+					Object newObj = serializer.deserialize(event.getData().getData(), configEntityClass);
 					String key = childDataToKey(event.getData());
+					Object updated = null;
 					Map<String, Object> entities = configObjects.putIfAbsent(configEntityClass, new HashMap<String, Object>());
 					synchronized (entities) {
-						entities.put(key, obj);
-					}							
+						updated = entities.put(key, newObj);
+					}				
+					if (isAdd) {
+						subject.onNext(new ConfigurationUpdateEvent(key, configEntityClass, updated, newObj, UpdateType.ADDED));
+					} else {
+						subject.onNext(new ConfigurationUpdateEvent(key, configEntityClass, updated, newObj, UpdateType.UPDATED));
+					}
 					logger.trace("key={} put/update in cache, now {} classes and {} objects of this key in cache\n", 
 							key,
 							configObjects.size(),
@@ -106,10 +123,12 @@ public class ConfigService {
 								&& isInitialized) {
 					String key = childDataToKey(event.getData());
 					if (configObjects.containsKey(configEntityClass)) {
+						Object removed;
 						Map<String, Object> entities = configObjects.get(configEntityClass);
 						synchronized (entities) {
-							entities.remove(key);
+							removed = entities.remove(key);
 						}
+						subject.onNext(new ConfigurationUpdateEvent(key, configEntityClass, removed, null, UpdateType.REMOVED));
 					}
 				}
 				break;
@@ -117,18 +136,18 @@ public class ConfigService {
 				reloadConfigTree();
 				logger.info("Initialization complete");
 				isInitialized = true;
-				isReadOnly = false;
-				syncReady.countDown();
+				syncInitialization.countDown();
 				break;
 			case CONNECTION_LOST:
 			case CONNECTION_SUSPENDED:
 				isReadOnly = true;
-				syncReady = new CountDownLatch(1);
+				if (connectionPhase == connectionPhaser.getPhase())
+					connectionPhase++;
 				logger.info("Connection with ZooKeeper lost");
 				break;
 			case CONNECTION_RECONNECTED:
 				isReadOnly = false;
-				syncReady.countDown();
+				connectionPhaser.arrive();
 				logger.info("Connection with ZooKeeper restored");
 				break;
 		}		
@@ -182,18 +201,61 @@ public class ConfigService {
 		}
 	}
 
+	@Override
+	public void start() throws ConnectionLossException {
+		try {
+			configCache.start();
+			isReadOnly = false;
+			connectionPhaser.arrive();
+			logger.debug("start() awaiting init complete"); 
+			syncInitialization.await();
+			logger.debug("start() awaiting init complete done");
+		} catch (Exception e) {
+			logger.error("Failed to TreeCache", e);
+			throw new ConnectionLossException(e);
+		}
+		
+	}
+
+	
+	@Override
 	public void awaitConnected() throws InterruptedException {
-		syncReady.await();
+		connectionPhaser.awaitAdvanceInterruptibly(connectionPhase);
 	}
 	
-	public void awaitConnected(long timeout, TimeUnit unit) throws InterruptedException {
-		syncReady.await(timeout, unit);
+	@Override
+	public boolean awaitConnected(long timeout, TimeUnit unit) throws InterruptedException {
+		try {
+			connectionPhaser.awaitAdvanceInterruptibly(connectionPhase, timeout, unit);
+			return true;
+		} catch(TimeoutException te) {
+			return false;
+		}
 	}
 	
-	public <T> boolean upsertConfigEntity(String key, T config) throws Exception {
+	@Override
+	public boolean isConnected() {
+		return !isReadOnly;
+	}
+	
+	
+	@Override
+	public <T> void save(String key, T config) throws ConnectionLossException {
+		if (config == null)
+			throw new UnknownTypeException("config is null");
+		if (key == null)
+			throw new UnknownTypeException("key is null");
+		
+		if (!isConnected()) {
+			throw new ConnectionLossException("Config service not connected to ZooKeeper");
+		}
+		
+		if (!classToType.containsKey(config.getClass()))
+			throw new UnknownTypeException("Specified "+config.getClass().toString()+" not registred");
+		
 		String type = classToType.get(config.getClass());
 		Class<Object> clazz = configTypes.get(type);
-		if (upsertConfigEntity(type, key, serializer.serialize(config))) {
+		if (saveConfigEntity(type, key, serializer.serialize(config))) {
 			Map<String, Object> entities = configObjects.putIfAbsent(clazz, new HashMap<String, Object>());
 			synchronized (entities) {
 				entities.put(key, config);
@@ -202,42 +264,21 @@ public class ConfigService {
 					key,
 					configObjects.size(),
 					configObjects.get(clazz).size());
-			return true;
-		}
-		return false;
-	}
-
-	private boolean upsertConfigEntity(String type, String key, byte[] config) {
-		checkArgument(!Strings.isNullOrEmpty(type));
-		checkArgument(!Strings.isNullOrEmpty(key));
-		checkArgument(config.length > 0);
-		
-		if (!(isInitialized && !isReadOnly)) {
-			return false;
-		}
-		
-		final String configEntityPath = configEnvironmentPath + "/" + type + "/" + key;
-		try {
-			if (zkClient.checkExists().forPath(configEntityPath) == null) {
-				zkClient.create().forPath(configEntityPath, config);
-			} else {
-				zkClient.setData().forPath(configEntityPath, config);
-			}
-			logger.trace("upsertConfigEntity() add new ConfigEntity type,key=("+type+","+key+");");
-			return true;
-		} catch (Exception e) {
-			logger.error("Failed to store at '{}' config: {}", configEntityPath, config, e);
-			return false;
 		}
 	}
 
+	
 	@SuppressWarnings("unchecked")
-	public <T> T getConfigEntity(Class<T> clazz, String key) {
-		String type = classToType.get(clazz);
-
-		checkArgument(!Strings.isNullOrEmpty(type));
-		checkArgument(!Strings.isNullOrEmpty(key));
+	@Override
+	public <T> T get(Class<T> clazz, String key) {
+		if (clazz == null)
+			throw new UnknownTypeException("clazz is null");
+		if (key == null)
+			throw new UnknownTypeException("key is null");
 		
+		if (!classToType.containsKey(clazz))
+			throw new UnknownTypeException("Specified "+clazz.toString()+" not registred");
+
 		//Check existent
 		if (configObjects.containsKey(clazz)) {
 			Map<String, Object> entities = configObjects.get(clazz);
@@ -248,33 +289,52 @@ public class ConfigService {
 		return null;
 	}
 
-	public List<Object> getAllConfigEntities(Class<? extends Object> clazz) {
-		String type = classToType.get(clazz);
-		Class<Object> classFromType = configTypes.get(type);
-		checkArgument(!Strings.isNullOrEmpty(type));
-		checkArgument(classFromType != null);
+	@SuppressWarnings("unchecked")
+	@Override
+	public <T> List<T> list(Class<T> type) {
+		if (type == null)
+			throw new UnknownTypeException("type is null");
 		
-		final List<Object> configEntities = new ArrayList<>();
+		if (!classToType.containsKey(type))
+			throw new UnknownTypeException("Specified "+type.toString()+" not registred");
+		
+		String typeString = classToType.get(type);
+		
+		if (!configTypes.containsKey(typeString))
+			throw new UnknownTypeException("Missconfiguration: Specified "+type.toString()+" registred but not found in configTypes map");
+		
+		Class<Object> classFromType = configTypes.get(typeString);
+
+		final List<T> configEntities = new ArrayList<>();
 		
 		if (configObjects.containsKey(classFromType)) {
 			logger.debug("Config cache for class {} have {} elements\n", classFromType.toString(), configObjects.get(classFromType).size());
 			Map<String, Object> entities = configObjects.get(classFromType);
 			synchronized (entities) {
-				configEntities.addAll(entities.values());
+				configEntities.addAll((Collection<T>) entities.values());
 			}
 		} else {
 			logger.debug("Class {} not found in cache\n", classFromType);
 		}
 		return configEntities;
+		
 	}
 	
-	public <T> void deleteConfigEntity(Class<T> clazz, String key) {
-		String type = classToType.get(clazz);
-		checkArgument(!Strings.isNullOrEmpty(type));
+	@Override
+	public <T> void delete(Class<T> clazz, String key) throws ConnectionLossException {
+		if (clazz == null)
+			throw new UnknownTypeException("clazz is null");
+		if (key == null)
+			throw new UnknownTypeException("key is null");
 		
-		if (!isInitialized) {
-			return;
+		if (!isConnected()) {
+			throw new ConnectionLossException("Config service not connected to ZooKeeper");
 		}
+		
+		if (!classToType.containsKey(clazz))
+			throw new UnknownTypeException("Specified "+clazz.toString()+" not registred");
+		
+		String type = classToType.get(clazz);
 		
 		final String configEntityPath = configEntityPath(type, key);
 
@@ -287,10 +347,32 @@ public class ConfigService {
 				}
 			}
 		} catch (Exception e) {
-			logger.error("Failed to delete at '{}'", configEntityPath, e);
+			throw new InvalidAccessException(e);
 		}
 	}
 
+	@Override
+	public Observable<ConfigurationUpdateEvent> listenUpdates() {
+		return subject;
+	}
+
+	
+	private boolean saveConfigEntity(String type, String key, byte[] config) {
+		final String configEntityPath = configEnvironmentPath + "/" + type + "/" + key;
+		try {
+			if (zkClient.checkExists().forPath(configEntityPath) == null) {
+				zkClient.create().forPath(configEntityPath, config);
+			} else {
+				zkClient.setData().forPath(configEntityPath, config);
+			}
+			logger.trace("upsertConfigEntity() add new ConfigEntity type,key=("+type+","+key+");");
+			return true;
+		} catch (Exception e) {
+			logger.error("Failed to store at '{}' config: {}", configEntityPath, config, e);
+			throw new InvalidAccessException(e);
+		}
+	}
+	
 	private void reloadConfigTree() {
 		for (Class<Object> clazz : classToType.keySet()) {
 			String path = configTypePathForClass(clazz);
@@ -304,18 +386,15 @@ public class ConfigService {
 				for (String  key : treeCacheObjects.keySet()) {
 					ChildData data = treeCacheObjects.get(key);
 					Object obj;
-					try {
-						obj = serializer.deserialize(data.getData(), clazz);
-						synchronized (entities) {
-							entities.put(key, obj);
-						}							
-						logger.debug("reloadConfigTree() key={} put in cache, now {} classes and {} objects\n",
-								key,
-								configObjects.size(),
-								configObjects.get(clazz).size());
-					} catch (Exception e) {
-						logger.error("Failed to deserialize at path '{}', key {}", path, key, e);
+					obj = serializer.deserialize(data.getData(), clazz);
+					synchronized (entities) {
+						entities.put(key, obj);
 					}
+					subject.onNext(new ConfigurationUpdateEvent(key, clazz, null, obj, UpdateType.ADDED));
+					logger.debug("reloadConfigTree() key={} put in cache, now {} classes and {} objects\n",
+							key,
+							configObjects.size(),
+							configObjects.get(clazz).size());
 				}
 			}
 		}
@@ -369,5 +448,21 @@ public class ConfigService {
 			return new ConfigService(this);
 		}
 	}
+
+	
+
+	
+
+	
+
+	
+
+
+	
+
+
+	
+
+	
 
 }
