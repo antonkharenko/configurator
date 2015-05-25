@@ -24,8 +24,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import rx.Observer;
+import rx.functions.Func1;
 
-import com.ogp.configurator.ConfigurationUpdateEvent.UpdateType;
+import com.ogp.configurator.ConfigurationEvent.ConfigType;
+import com.ogp.configurator.ConfigurationEvent.UpdateType;
 import com.ogp.configurator.examples.FixedCurrencyRates;
 import com.ogp.configurator.examples.ServerConfigEntity;
 import com.ogp.configurator.serializer.JacksonSerializator;
@@ -68,7 +70,36 @@ public class ConfigServiceTest {
 				.build();
 
 		assertNotNull(configService);
-		configService.start();		
+
+		final CountDownLatch waitInitObj = new CountDownLatch(1);
+		configService.listenUpdates()
+			.filter(new Func1<ConfigurationEvent, Boolean>() {
+				@Override
+				public Boolean call(ConfigurationEvent t1) {
+					return(t1.getConfigType() == ConfigType.INITIALIZED);
+				}
+			})
+			.subscribe(new Observer<ConfigurationEvent>() {
+
+			@Override
+			public void onCompleted() {
+				
+			}
+
+			@Override
+			public void onError(Throwable e) {
+				
+			}
+
+			@Override
+			public void onNext(ConfigurationEvent t) {
+					waitInitObj.countDown();
+			}
+		});
+		configService.start();
+		
+		assertTrue(waitInitObj.await(5, TimeUnit.MINUTES));
+		
 		logger.info("ConfigServiceTest() -- setUp() starting.... Done.");
 	}
 
@@ -95,26 +126,26 @@ public class ConfigServiceTest {
 		logger.info("ConfigServiceTest() -- testSaveStringT() starting....");
 		assertNotNull(configService);
 		final CountDownLatch waitSaveObj = new CountDownLatch(1);
-		final List<ConfigurationUpdateEvent> receivedEvents = new ArrayList<ConfigurationUpdateEvent>();
+		final List<ConfigurationEvent> receivedEvents = new ArrayList<ConfigurationEvent>();
 		
-		configService.listenUpdates().subscribe(new Observer<ConfigurationUpdateEvent>() {
+		configService.listenUpdates().subscribe(new Observer<ConfigurationEvent>() {
 
-			@Override
-			public void onCompleted() {
-				
-			}
-
-			@Override
-			public void onError(Throwable e) {
-				
-			}
-
-			@Override
-			public void onNext(ConfigurationUpdateEvent t) {
-				logger.debug("{}: type={}",t.toString(),t.getUpdateType());
-				receivedEvents.add(t);
-				waitSaveObj.countDown();
-			}
+				@Override
+				public void onCompleted() {
+					
+				}
+	
+				@Override
+				public void onError(Throwable e) {
+					
+				}
+	
+				@Override
+				public void onNext(ConfigurationEvent t) {
+					logger.debug("{}: type={}",t.toString(),t.getUpdateType());
+					receivedEvents.add(t);
+					waitSaveObj.countDown();
+				}
 		});
 		
 		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
@@ -179,7 +210,7 @@ public class ConfigServiceTest {
 			
 			List<ServerConfigEntity> confEnts = configService.list(ServerConfigEntity.class);
 			assertNotNull(confEnts);
-			logger.debug("---------------------------------------------------------------------");
+			
 			for (ServerConfigEntity serverConfigEntity : confEnts) {
 				logger.debug("Entity: {}", serverConfigEntity.toString());
 			}

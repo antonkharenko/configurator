@@ -4,7 +4,8 @@ import static com.google.common.base.Preconditions.*;
 
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableMap;
-import com.ogp.configurator.ConfigurationUpdateEvent.UpdateType;
+import com.ogp.configurator.ConfigurationEvent.ConfigType;
+import com.ogp.configurator.ConfigurationEvent.UpdateType;
 import com.ogp.configurator.serializer.ISerializer;
 
 import org.apache.curator.framework.CuratorFramework;
@@ -21,7 +22,6 @@ import rx.subjects.PublishSubject;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Phaser;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -43,12 +43,11 @@ public class ConfigService implements IConfigurationManagement {
 	private final String configEnvironmentPath;
 	private final TreeCache configCache;
 	
-	private final PublishSubject<ConfigurationUpdateEvent> subject;
+	private final PublishSubject<ConfigurationEvent> subject;
 	
-	private boolean isInitialized; // switch to true after initialization complete, used during startup
-	private boolean isReadOnly; // Indicate treeCache state, is it available for write.
+	private volatile boolean isInitialized; // switch to true after initialization complete, used during startup
+	private volatile boolean isReadOnly; // Indicate treeCache state, is it available for write.
 	
-	private final CountDownLatch syncInitialization;
 	private volatile int connectionPhase;
 	private Phaser connectionPhaser;
 	
@@ -66,7 +65,7 @@ public class ConfigService implements IConfigurationManagement {
 		this.configTypes = ImmutableMap.copyOf(builder.configTypes);
 		this.configObjects = new ConcurrentHashMap<>(configTypes.size(), 0.9f, 1);
 		this.subject = PublishSubject.create();
-		this.syncInitialization = new CountDownLatch(1);
+		//this.syncInitialization = new CountDownLatch(1);
 		this.connectionPhase = 0;
 		this.connectionPhaser = new Phaser(1);
 		
@@ -90,7 +89,6 @@ public class ConfigService implements IConfigurationManagement {
 		});
 	}
 
-	//TODO check if event don't lost during initialization, remove isInitialized check and reloadConfigTree
 	private void processEvent(TreeCacheEvent event) throws Exception {
 		Class<Object> configEntityClass = childDataToClass(event.getData());
 		boolean isAdd = false;
@@ -98,8 +96,7 @@ public class ConfigService implements IConfigurationManagement {
 			case NODE_ADDED:
 				isAdd = true;
 			case NODE_UPDATED:
-				if (configEntityClass != null 
-								&& isInitialized) {
+				if (configEntityClass != null) {
 					Object newObj = serializer.deserialize(event.getData().getData(), configEntityClass);
 					String key = childDataToKey(event.getData());
 					Object updated = null;
@@ -108,9 +105,9 @@ public class ConfigService implements IConfigurationManagement {
 						updated = entities.put(key, newObj);
 					}				
 					if (isAdd) {
-						subject.onNext(new ConfigurationUpdateEvent(key, configEntityClass, updated, newObj, UpdateType.ADDED));
+						subject.onNext(new ConfigurationEvent(key, configEntityClass, updated, newObj, UpdateType.ADDED));
 					} else {
-						subject.onNext(new ConfigurationUpdateEvent(key, configEntityClass, updated, newObj, UpdateType.UPDATED));
+						subject.onNext(new ConfigurationEvent(key, configEntityClass, updated, newObj, UpdateType.UPDATED));
 					}
 					logger.trace("key={} put/update in cache, now {} classes and {} objects of this key in cache\n", 
 							key,
@@ -119,8 +116,7 @@ public class ConfigService implements IConfigurationManagement {
 				}
 				break;
 			case NODE_REMOVED:
-				if (configEntityClass != null
-								&& isInitialized) {
+				if (configEntityClass != null) {
 					String key = childDataToKey(event.getData());
 					if (configObjects.containsKey(configEntityClass)) {
 						Object removed;
@@ -128,15 +124,14 @@ public class ConfigService implements IConfigurationManagement {
 						synchronized (entities) {
 							removed = entities.remove(key);
 						}
-						subject.onNext(new ConfigurationUpdateEvent(key, configEntityClass, removed, null, UpdateType.REMOVED));
+						subject.onNext(new ConfigurationEvent(key, configEntityClass, removed, null, UpdateType.REMOVED));
 					}
 				}
 				break;
 			case INITIALIZED:
-				reloadConfigTree();
 				logger.info("Initialization complete");
+				subject.onNext(new ConfigurationEvent(ConfigType.INITIALIZED));
 				isInitialized = true;
-				syncInitialization.countDown();
 				break;
 			case CONNECTION_LOST:
 			case CONNECTION_SUSPENDED:
@@ -144,11 +139,13 @@ public class ConfigService implements IConfigurationManagement {
 				if (connectionPhase == connectionPhaser.getPhase())
 					connectionPhase++;
 				logger.info("Connection with ZooKeeper lost");
+				subject.onNext(new ConfigurationEvent(ConfigType.CONNECTION_LOST));
 				break;
 			case CONNECTION_RECONNECTED:
 				isReadOnly = false;
 				connectionPhaser.arrive();
 				logger.info("Connection with ZooKeeper restored");
+				subject.onNext(new ConfigurationEvent(ConfigType.CONNECTION_RESORED));
 				break;
 		}		
 	}
@@ -207,9 +204,6 @@ public class ConfigService implements IConfigurationManagement {
 			configCache.start();
 			isReadOnly = false;
 			connectionPhaser.arrive();
-			logger.debug("start() awaiting init complete"); 
-			syncInitialization.await();
-			logger.debug("start() awaiting init complete done");
 		} catch (Exception e) {
 			logger.error("Failed to TreeCache", e);
 			throw new ConnectionLossException(e);
@@ -238,6 +232,10 @@ public class ConfigService implements IConfigurationManagement {
 		return !isReadOnly;
 	}
 	
+	@Override
+	public boolean isInitialized() {
+		return isInitialized;
+	}
 	
 	@Override
 	public <T> void save(String key, T config) throws ConnectionLossException {
@@ -352,7 +350,7 @@ public class ConfigService implements IConfigurationManagement {
 	}
 
 	@Override
-	public Observable<ConfigurationUpdateEvent> listenUpdates() {
+	public Observable<ConfigurationEvent> listenUpdates() {
 		return subject;
 	}
 
@@ -373,32 +371,6 @@ public class ConfigService implements IConfigurationManagement {
 		}
 	}
 	
-	private void reloadConfigTree() {
-		for (Class<Object> clazz : classToType.keySet()) {
-			String path = configTypePathForClass(clazz);
-			//Cleanup all entities for every 
-			Map<String, Object> entities = configObjects.putIfAbsent(clazz, new HashMap<String, Object>());
-			synchronized (entities) {
-				entities.clear();
-			}
-			Map<String,ChildData> treeCacheObjects = configCache.getCurrentChildren(path);
-			if (treeCacheObjects != null) {
-				for (String  key : treeCacheObjects.keySet()) {
-					ChildData data = treeCacheObjects.get(key);
-					Object obj;
-					obj = serializer.deserialize(data.getData(), clazz);
-					synchronized (entities) {
-						entities.put(key, obj);
-					}
-					subject.onNext(new ConfigurationUpdateEvent(key, clazz, null, obj, UpdateType.ADDED));
-					logger.debug("reloadConfigTree() key={} put in cache, now {} classes and {} objects\n",
-							key,
-							configObjects.size(),
-							configObjects.get(clazz).size());
-				}
-			}
-		}
-	}
 
 	private String configEntityPath(String type, String key) {
 		return configTypePath(type) + "/" + key;
@@ -408,9 +380,6 @@ public class ConfigService implements IConfigurationManagement {
 		return configEnvironmentPath + "/" + type;
 	}
 
-	private String configTypePathForClass(Class<?> clazz) {
-		return configEnvironmentPath + "/" + classToType.get(clazz);
-	}
 	
 	private void ensurePath(String path) {
 		try {

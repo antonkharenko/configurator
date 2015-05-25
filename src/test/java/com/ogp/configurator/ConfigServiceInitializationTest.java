@@ -2,8 +2,10 @@ package com.ogp.configurator;
 
 import static org.junit.Assert.*;
 
+import java.util.ArrayList;
 import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -22,7 +24,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import rx.Observer;
+import rx.functions.Func1;
 
+import com.ogp.configurator.ConfigurationEvent.ConfigType;
+import com.ogp.configurator.ConfigurationEvent.UpdateType;
 import com.ogp.configurator.examples.ServerConfigEntity;
 import com.ogp.configurator.serializer.JacksonSerializator;
 
@@ -31,8 +36,8 @@ import com.ogp.configurator.serializer.JacksonSerializator;
  *
  */
 
-public class ConfigServiceClusterTest {
-	private static final Logger logger = LoggerFactory.getLogger(ConfigServiceClusterTest.class);
+public class ConfigServiceInitializationTest {
+	private static final Logger logger = LoggerFactory.getLogger(ConfigServiceInitializationTest.class);
 	
 	private static final String ENVIRONMENT = "local";
 	private static final String CONFIG_TYPE = "server";
@@ -88,40 +93,15 @@ public class ConfigServiceClusterTest {
 		saveConfigService = ConfigService.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
-		saveConfigService.start();
-		
-		getClient = CuratorFrameworkFactory.newClient(getServerConnString, retryPolicy);
-		getClient.start();
-		getClient.blockUntilConnected();
-		getConfigService = ConfigService.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
-				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
-				.build();
-		getConfigService.start();
-		
-	}
-
-	/**
-	 * @throws java.lang.Exception
-	 */
-	@After
-	public void tearDown() throws Exception {
-		saveClient.close();
-		saveClient = null;
-		saveConfigService = null;
-		
-		getClient.close();
-		getClient = null;
-		getConfigService = null;
-	}
-
-	@Test
-	public void testSaveConfigEntityOnDifferentNodes() throws Exception {
-		assertNotNull(saveConfigService);
-		assertNotNull(getConfigService);
-		
-		final Hashtable<String, ConfigurationEvent> receivedConfigUpdates = new Hashtable<String, ConfigurationEvent>();
-		final CountDownLatch waitSaveEvents = new CountDownLatch(2); //Wait two events on Save node and Get node
-		saveConfigService.listenUpdates().subscribe(new Observer<ConfigurationEvent>() {
+		final CountDownLatch waitInitObj = new CountDownLatch(1);
+		saveConfigService.listenUpdates()
+			.filter(new Func1<ConfigurationEvent, Boolean>() {
+				@Override
+				public Boolean call(ConfigurationEvent t1) {
+					return(t1.getConfigType() == ConfigType.INITIALIZED);
+				}
+			})
+			.subscribe(new Observer<ConfigurationEvent>() {
 
 			@Override
 			public void onCompleted() {
@@ -135,12 +115,59 @@ public class ConfigServiceClusterTest {
 
 			@Override
 			public void onNext(ConfigurationEvent t) {
-				logger.debug("saveConfigService() {}: type={}",t.toString(),t.getUpdateType());
-				receivedConfigUpdates.put("SAVE", t);
-				waitSaveEvents.countDown();
+					waitInitObj.countDown();
 			}
 		});
+		saveConfigService.start();
 		
+		assertTrue(waitInitObj.await(5, TimeUnit.MINUTES));
+	
+	}
+
+	/**
+	 * @throws java.lang.Exception
+	 */
+	@After
+	public void tearDown() throws Exception {
+		saveClient.close();
+		saveClient = null;
+		saveConfigService = null;
+		
+		if (getClient != null) {
+			getClient.close();
+			getClient = null;
+			getConfigService = null;
+		}
+	}
+
+	@Test
+	public void testInitializationService() throws Exception {
+		assertNotNull(saveConfigService);
+		
+		final int NUMBER_OF_ENTITIES = 10000;
+		
+		try {
+			for(int i=0;i<NUMBER_OF_ENTITIES;i++) {
+				saveConfigService.save(String.valueOf(i), getServerConfigEntity(i));
+			}
+		} catch (Exception e) {
+			fail(e.toString());
+		}
+		Iterator<InstanceSpec> it = curatorCluster.getInstances().iterator(); 
+		String saveServerConnString = it.next().getConnectString();
+		String getServerConnString = it.next().getConnectString();
+		assertNotNull(saveServerConnString);
+		assertNotNull(getServerConnString);
+		assertNotEquals(saveServerConnString, getServerConnString);
+		getClient = CuratorFrameworkFactory.newClient(getServerConnString, retryPolicy);
+		getClient.start();
+		getClient.blockUntilConnected();
+		getConfigService = ConfigService.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
+				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
+				.build();
+		final List<ConfigurationEvent> receivedEvents = new ArrayList<ConfigurationEvent>();
+		
+		final CountDownLatch waitInitObj = new CountDownLatch(1);
 		getConfigService.listenUpdates().subscribe(new Observer<ConfigurationEvent>() {
 
 			@Override
@@ -155,27 +182,23 @@ public class ConfigServiceClusterTest {
 
 			@Override
 			public void onNext(ConfigurationEvent t) {
-				logger.debug("getConfigService() {}: type={}",t.toString(),t.getUpdateType());
-				receivedConfigUpdates.put("GET", t);
-				waitSaveEvents.countDown();
+				if (t.getConfigType() == ConfigType.INITIALIZED)
+					waitInitObj.countDown();
+				else if(t.getConfigType() == ConfigType.UNDEFINED) {
+					if (t.getUpdateType() == UpdateType.ADDED) {
+						receivedEvents.add(t);
+					}
+				}
 			}
 		});
+		getConfigService.start();
 		
-		//Save new ConfigEntity
-		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
-		try {
-			saveConfigService.save(testConfiguration.getId(), testConfiguration);
-		} catch (Exception e) {
-			fail(e.toString());
-		}
-		//Wait until both services got events
-		assertTrue(waitSaveEvents.await(1, TimeUnit.MINUTES));
+		assertTrue(waitInitObj.await(5, TimeUnit.MINUTES));
 		
-		//Check that both entity in updates equals
-		assertEquals(2, receivedConfigUpdates.size());
-		assertTrue(receivedConfigUpdates.containsKey("GET"));
-		assertTrue(receivedConfigUpdates.containsKey("SAVE"));
-		assertEquals(receivedConfigUpdates.get("GET").getNewValue(), receivedConfigUpdates.get("SAVE").getNewValue());
-		
+		assertEquals(NUMBER_OF_ENTITIES, receivedEvents.size());
+	}
+	
+	private ServerConfigEntity getServerConfigEntity(int i) {
+		return new ServerConfigEntity(String.valueOf(i),"name"+String.valueOf(i),"host"+String.valueOf(i),i*10);
 	}
 }

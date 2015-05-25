@@ -76,7 +76,7 @@ public interface IConfigurationManagement {
 	 *
 	 * @return Observable which emits all configuration update events.
 	 */
-	Observable<ConfigurationUpdateEvent> listenUpdates();
+	Observable<ConfigurationEvent> listenUpdates();
 
 	/**
 	 * Returns the connection state to the configuration storage.
@@ -84,6 +84,13 @@ public interface IConfigurationManagement {
 	 * @return true if connected.
 	 */
 	boolean isConnected();
+	
+	/**
+	 * Returns the initialization state of the configuration storage.
+	 *
+	 * @return true if initializsed.
+	 */
+	boolean isInitialized();
 
 	/**
 	 * Causes the current thread to wait until connection to the configuration storage
