@@ -7,9 +7,6 @@ package com.ogp.configurator;
  */
 public class UnknownTypeException extends RuntimeException {
 
-	/**
-	 *
-	 */
 	private static final long serialVersionUID = 3124237997999572551L;
 
 	public UnknownTypeException(String message) {

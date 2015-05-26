@@ -6,11 +6,8 @@ package com.ogp.configurator;
  *
  * @author Anton Kharenko
  */
-public class ConnectionLossException extends Exception {
+public class ConnectionLossException extends RuntimeException {
 
-	/**
-	 * 
-	 */
 	private static final long serialVersionUID = -7097884642255639396L;
 
 	public ConnectionLossException(String message) {

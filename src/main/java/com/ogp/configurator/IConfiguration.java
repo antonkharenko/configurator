@@ -17,7 +17,7 @@ public interface IConfiguration {
 
 	/**
 	 * Start configuration client. Most methods will not work until the client is started. It doesn't block
-	 * thread however getter won't return full state of configuration data until local replica is initialized.
+	 * thread however getters won't return full state of configuration data until local replica is initialized.
 	 * You can wait for initialized state either by polling {@code isInitialized()} method or listening for
 	 * corresponding event.
 	 *
