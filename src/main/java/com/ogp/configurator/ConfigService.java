@@ -238,8 +238,8 @@ public class ConfigService implements IConfigurationManagement {
 	}
 	
 	@Override
-	public <T> void save(String key, T config) throws ConnectionLossException {
-		if (config == null)
+	public <T> void save(String key, T value) throws ConnectionLossException {
+		if (value == null)
 			throw new UnknownTypeException("config is null");
 		if (key == null)
 			throw new UnknownTypeException("key is null");
@@ -248,15 +248,15 @@ public class ConfigService implements IConfigurationManagement {
 			throw new ConnectionLossException("Config service not connected to ZooKeeper");
 		}
 		
-		if (!classToType.containsKey(config.getClass()))
-			throw new UnknownTypeException("Specified "+config.getClass().toString()+" not registred");
+		if (!classToType.containsKey(value.getClass()))
+			throw new UnknownTypeException("Specified "+ value.getClass().toString()+" not registred");
 		
-		String type = classToType.get(config.getClass());
+		String type = classToType.get(value.getClass());
 		Class<Object> clazz = configTypes.get(type);
-		if (saveConfigEntity(type, key, serializer.serialize(config))) {
+		if (saveConfigEntity(type, key, serializer.serialize(value))) {
 			Map<String, Object> entities = configObjects.putIfAbsent(clazz, new HashMap<String, Object>());
 			synchronized (entities) {
-				entities.put(key, config);
+				entities.put(key, value);
 			}							
 			logger.trace("key={} put/update in cache, now {} classes and {} objects of this key in cache\n", 
 					key,
