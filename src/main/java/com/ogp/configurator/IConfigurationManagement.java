@@ -23,22 +23,20 @@ public interface IConfigurationManagement {
 	 * Saves given configuration object at given key. If object with such key exists it
 	 * will be replaced otherwise inserts new object.
 	 *
-	 * @param key configuration key
-	 * @param config configuration object
-	 * @param <T> class of configuration object
+	 * @param key configuration object key
+	 * @param value configuration object
 	 * @throws ConnectionLossException if not connected to the configuration storage.
 	 * @throws InvalidAccessException if not enough rights for write operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 * @throws SerializationException Runtime exception if something wrong happened in serializer. 
 	 */
-	<T> void save(String key, T config) throws ConnectionLossException;
+	<T> void save(String key, T value) throws ConnectionLossException;
 
 	/**
 	 * Deletes configuration object of the given type and with the given key.
 	 *
-	 * @param type configuration type
-	 * @param key configuration key
-	 * @param <T> class of configuration object
+	 * @param type configuration object class
+	 * @param key configuration object key
 	 * @throws ConnectionLossException if not connected to the configuration storage.
 	 * @throws InvalidAccessException if not enough rights for delete operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
@@ -50,9 +48,8 @@ public interface IConfigurationManagement {
 	 * object doesn't exists. This operation is always use locally cached instances and will return latest
 	 * known values even when connection to configuration storage was lost.
 	 *
-	 * @param type configuration type
-	 * @param key configuration key
-	 * @param <T> class of configuration object
+	 * @param type configuration object class
+	 * @param key configuration object key
 	 * @return Configuration object of the given type under the given key or {@code null} if such object doesn't exists.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
@@ -63,8 +60,7 @@ public interface IConfigurationManagement {
 	 * objects exists. This operation is always use locally cached instances and will return latest
 	 * known values even when connection to configuration storage was lost.
 	 *
-	 * @param type configuration type
-	 * @param <T> class of configuration object
+	 * @param type configuration object class
 	 * @return Returns list of all configuration object for the given type or empty list if no such objects exists.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
