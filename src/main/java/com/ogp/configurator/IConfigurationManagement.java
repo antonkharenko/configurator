@@ -1,78 +1,69 @@
 package com.ogp.configurator;
 
-import rx.Observable;
+import com.ogp.configurator.serializer.SerializationException;
 
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import com.ogp.configurator.serializer.SerializationException;
-
 /**
+ * This interface provides access to configuration storage for both read and write operations. All calls to this
+ * interface is always a direct calls to to the underlying configuration storage.
+ *
  * @author Anton Kharenko
  */
 public interface IConfigurationManagement {
 
 	/**
-	 * Start configuration management service and blocks until
-	 * all configuration received and cached in local cache tree.
-	 * @throws ConnectionLossException if not connected to the configuration storage.
+	 * Start configuration client. Most methods will not work until the client is started.
+	 *
+	 * @throws ConnectionLossException if not able to connect to the configuration storage.
 	 */
-	void start() throws ConnectionLossException;
+	void start();
 
 	/**
-	 * Saves given configuration object at given key. If object with such key exists it
+	 * Saves given configuration object under the given key. If object with such key exists it
 	 * will be replaced otherwise inserts new object.
 	 *
 	 * @param key configuration object key
 	 * @param value configuration object
 	 * @throws ConnectionLossException if not connected to the configuration storage.
-	 * @throws InvalidAccessException if not enough rights for write operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
-	 * @throws SerializationException Runtime exception if something wrong happened in serializer. 
+	 * @throws SerializationException Runtime exception if something wrong happened in serializer.
 	 */
-	<T> void save(String key, T value) throws ConnectionLossException;
+	<T> void save(String key, T value);
 
 	/**
-	 * Deletes configuration object of the given type and with the given key.
+	 * Deletes configuration object of the given type stored under the given key.
 	 *
 	 * @param type configuration object class
 	 * @param key configuration object key
 	 * @throws ConnectionLossException if not connected to the configuration storage.
-	 * @throws InvalidAccessException if not enough rights for delete operation.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
-	<T> void delete(Class<T> type, String key) throws ConnectionLossException;
+	<T> void delete(Class<T> type, String key);
 
 	/**
-	 * Returns configuration object of the given type under the given key or {@code null} if such
-	 * object doesn't exists. This operation is always use locally cached instances and will return latest
-	 * known values even when connection to configuration storage was lost.
+	 * Returns configuration object of the given type stored under the given key or {@code null} if such
+	 * object doesn't exists.
 	 *
 	 * @param type configuration object class
 	 * @param key configuration object key
 	 * @return Configuration object of the given type under the given key or {@code null} if such object doesn't exists.
+	 * @throws ConnectionLossException if not connected to the configuration storage.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
 	<T> T get(Class<T> type, String key);
 
 	/**
 	 * Returns list of all configuration object for the given type or empty list if no such
-	 * objects exists. This operation is always use locally cached instances and will return latest
-	 * known values even when connection to configuration storage was lost.
+	 * objects exists.
 	 *
 	 * @param type configuration object class
 	 * @return Returns list of all configuration object for the given type or empty list if no such objects exists.
+	 * @throws ConnectionLossException if not connected to the configuration storage.
 	 * @throws UnknownTypeException if given configuration type wasn't registered to the service.
 	 */
 	<T> List<T> list(Class<T> type);
-
-	/**
-	 * Listens for all configuration updates events. It provides reactive approach for listening of configuration changes
-	 * in contrast of polling getter methods.
-	 *
-	 * @return Observable which emits all configuration update events.
-	 */
-	Observable<ConfigurationEvent> listenUpdates();
 
 	/**
 	 * Returns the connection state to the configuration storage.
@@ -80,13 +71,6 @@ public interface IConfigurationManagement {
 	 * @return true if connected.
 	 */
 	boolean isConnected();
-	
-	/**
-	 * Returns the initialization state of the configuration storage.
-	 *
-	 * @return true if initializsed.
-	 */
-	boolean isInitialized();
 
 	/**
 	 * Causes the current thread to wait until connection to the configuration storage
@@ -107,5 +91,4 @@ public interface IConfigurationManagement {
 	 * @throws InterruptedException if the current thread is interrupted while waiting
 	 */
 	boolean awaitConnected(long timeout, TimeUnit unit) throws InterruptedException;
-
 }

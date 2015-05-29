@@ -3,12 +3,10 @@ package com.ogp.configurator;
 import static org.junit.Assert.*;
 
 import java.util.ArrayList;
-import java.util.Hashtable;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
@@ -22,10 +20,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import rx.Observer;
-import rx.functions.Func1;
-
 import com.ogp.configurator.ConfigurationEvent.ConfigType;
 import com.ogp.configurator.ConfigurationEvent.UpdateType;
 import com.ogp.configurator.examples.ServerConfigEntity;
@@ -45,8 +40,8 @@ public class ConfigServiceInitializationTest {
 	private static  RetryPolicy retryPolicy;	
 	private CuratorFramework saveClient;
 	private CuratorFramework getClient;
-	private ConfigService saveConfigService;
-	private ConfigService getConfigService;
+	private IConfigurationManagement saveConfigService;
+	private IConfiguration getConfigService;
 	
 	/**
 	 * @throws java.lang.Exception
@@ -90,37 +85,11 @@ public class ConfigServiceInitializationTest {
 		saveClient = CuratorFrameworkFactory.newClient(saveServerConnString, retryPolicy);
 		saveClient.start();
 		saveClient.blockUntilConnected();
-		saveConfigService = ConfigService.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
+		saveConfigService = ConfigurationManager.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
-		final CountDownLatch waitInitObj = new CountDownLatch(1);
-		saveConfigService.listenUpdates()
-			.filter(new Func1<ConfigurationEvent, Boolean>() {
-				@Override
-				public Boolean call(ConfigurationEvent t1) {
-					return(t1.getConfigType() == ConfigType.INITIALIZED);
-				}
-			})
-			.subscribe(new Observer<ConfigurationEvent>() {
-
-			@Override
-			public void onCompleted() {
-				
-			}
-
-			@Override
-			public void onError(Throwable e) {
-				
-			}
-
-			@Override
-			public void onNext(ConfigurationEvent t) {
-					waitInitObj.countDown();
-			}
-		});
+	
 		saveConfigService.start();
-		
-		assertTrue(waitInitObj.await(5, TimeUnit.MINUTES));
 	
 	}
 
@@ -162,13 +131,13 @@ public class ConfigServiceInitializationTest {
 		getClient = CuratorFrameworkFactory.newClient(getServerConnString, retryPolicy);
 		getClient.start();
 		getClient.blockUntilConnected();
-		getConfigService = ConfigService.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
+		getConfigService = Configuration.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
 		final List<ConfigurationEvent> receivedEvents = new ArrayList<ConfigurationEvent>();
 		
 		final CountDownLatch waitInitObj = new CountDownLatch(1);
-		getConfigService.listenUpdates().subscribe(new Observer<ConfigurationEvent>() {
+		getConfigService.listen().subscribe(new Observer<ConfigurationEvent>() {
 
 			@Override
 			public void onCompleted() {

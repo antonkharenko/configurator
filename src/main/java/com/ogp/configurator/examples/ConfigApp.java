@@ -4,10 +4,9 @@ import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.retry.ExponentialBackoffRetry;
-
-import com.ogp.configurator.ConfigService;
+import com.ogp.configurator.Configuration;
+import com.ogp.configurator.IConfiguration;
 import com.ogp.configurator.serializer.JacksonSerializator;
-
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,7 +33,7 @@ public class ConfigApp {
 		client.start();
 
 		// Init config service
-		final ConfigService configService = ConfigService.newBuilder(client, new JacksonSerializator(), ENVIRONMENT)
+		final IConfiguration configService = Configuration.newBuilder(client, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();

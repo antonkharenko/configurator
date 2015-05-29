@@ -21,15 +21,17 @@ public class ConfigurationEvent {
 	public enum ConfigType {
 		UNDEFINED,
 		INITIALIZED,
-		CONNECTION_RESORED,
+		CONNECTION_RESTORED,
 		CONNECTION_LOST;
 	}
 
 	private final String type;
 
 	private final Class<?> typeClass;
+	
+	private final String key;
 
-	private final Object oldValue;
+	private Object oldValue;
 
 	private final Object newValue;
 
@@ -43,14 +45,16 @@ public class ConfigurationEvent {
 		this.typeClass = DEFAULT_CLASS;
 		this.oldValue = null;
 		this.newValue = null;
+		this.key = new String("");
 		this.updateType = UpdateType.UNDEFINED;
 	}
 	
-	public ConfigurationEvent(String type, Class<?> typeClass, Object oldValue, Object newValue, UpdateType updateType) {
+	public ConfigurationEvent(String type, Class<?> typeClass, String key, Object oldValue, Object newValue, UpdateType updateType) {
 		this.type = type;
 		this.typeClass = typeClass;
 		this.oldValue = oldValue;
 		this.newValue = newValue;
+		this.key = key;
 		this.updateType = updateType;
 		this.configType = ConfigType.UNDEFINED;
 	}
@@ -63,13 +67,23 @@ public class ConfigurationEvent {
 		return typeClass;
 	}
 
+	public String getKey() {
+		return key;
+	}
+	
 	public Object getOldValue() {
 		return oldValue;
 	}
-
+	
+	public void setOldValue(Object obj) {
+		oldValue = obj;
+	}
+	
 	public Object getNewValue() {
 		return newValue;
 	}
+	
+	
 
 	public UpdateType getUpdateType() {
 		return updateType;
@@ -91,6 +105,7 @@ public class ConfigurationEvent {
 		ConfigurationEvent that = (ConfigurationEvent) o;
 		return Objects.equals(type, that.type) &&
 				Objects.equals(typeClass, that.typeClass) &&
+				Objects.equals(key, that.key) &&
 				Objects.equals(oldValue, that.oldValue) &&
 				Objects.equals(newValue, that.newValue) &&
 				Objects.equals(updateType, that.updateType) &&
@@ -99,7 +114,7 @@ public class ConfigurationEvent {
 
 	@Override
 	public int hashCode() {
-		return Objects.hash(type, typeClass, oldValue, newValue, updateType, configType);
+		return Objects.hash(type, key, typeClass, oldValue, newValue, updateType, configType);
 	}
 
 	@Override
@@ -107,6 +122,7 @@ public class ConfigurationEvent {
 		return "ConfigurationEvent{" +
 				"type='" + type + '\'' +
 				", typeClass=" + typeClass +
+				", key=" + key +
 				", oldValue=" + oldValue +
 				", newValue=" + newValue +
 				", updateType=" + updateType +

@@ -40,8 +40,10 @@ public class ConfigServiceClusterTest {
 	private static  RetryPolicy retryPolicy;	
 	private CuratorFramework saveClient;
 	private CuratorFramework getClient;
-	private ConfigService saveConfigService;
-	private ConfigService getConfigService;
+	private CuratorFramework monitorClient;
+	private IConfigurationManagement saveConfigService;
+	private IConfiguration getConfigService;
+	private IConfigurationMonitor monitorConfigService;
 	
 	/**
 	 * @throws java.lang.Exception
@@ -74,26 +76,41 @@ public class ConfigServiceClusterTest {
 		assertEquals(3, curatorCluster.getInstances().size());
 		Iterator<InstanceSpec> it = curatorCluster.getInstances().iterator(); 
 		String saveServerConnString = it.next().getConnectString();
+		String monitorServerConnString = it.next().getConnectString();
 		String getServerConnString = it.next().getConnectString();
 		assertNotNull(saveServerConnString);
+		assertNotNull(monitorServerConnString);
 		assertNotNull(getServerConnString);
 		assertNotEquals(saveServerConnString, getServerConnString);
+		assertNotEquals(saveServerConnString, monitorServerConnString);
+		assertNotEquals(getServerConnString, monitorServerConnString);
 		
 		logger.info("Save server connect string %s\n", saveServerConnString);
+		logger.info("Monitor server connect string %s\n", monitorServerConnString);
 		logger.info("Get server %s\n", getServerConnString);
 		
 		saveClient = CuratorFrameworkFactory.newClient(saveServerConnString, retryPolicy);
 		saveClient.start();
 		saveClient.blockUntilConnected();
-		saveConfigService = ConfigService.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
+		saveConfigService = ConfigurationManager.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
 		saveConfigService.start();
+		saveConfigService.awaitConnected();
+		
+		monitorClient = CuratorFrameworkFactory.newClient(monitorServerConnString, retryPolicy);
+		monitorClient.start();
+		monitorClient.blockUntilConnected();
+		monitorConfigService = ConfigurationMonitor.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
+				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
+				.build();
+		monitorConfigService.start();
+		
 		
 		getClient = CuratorFrameworkFactory.newClient(getServerConnString, retryPolicy);
 		getClient.start();
 		getClient.blockUntilConnected();
-		getConfigService = ConfigService.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
+		getConfigService = Configuration.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
 		getConfigService.start();
@@ -109,6 +126,10 @@ public class ConfigServiceClusterTest {
 		saveClient = null;
 		saveConfigService = null;
 		
+		monitorClient.close();
+		monitorClient = null;
+		monitorConfigService = null;
+		
 		getClient.close();
 		getClient = null;
 		getConfigService = null;
@@ -120,28 +141,9 @@ public class ConfigServiceClusterTest {
 		assertNotNull(getConfigService);
 		
 		final Hashtable<String, ConfigurationEvent> receivedConfigUpdates = new Hashtable<String, ConfigurationEvent>();
-		final CountDownLatch waitSaveEvents = new CountDownLatch(2); //Wait two events on Save node and Get node
-		saveConfigService.listenUpdates().subscribe(new Observer<ConfigurationEvent>() {
-
-			@Override
-			public void onCompleted() {
-				
-			}
-
-			@Override
-			public void onError(Throwable e) {
-				
-			}
-
-			@Override
-			public void onNext(ConfigurationEvent t) {
-				logger.debug("saveConfigService() {}: type={}",t.toString(),t.getUpdateType());
-				receivedConfigUpdates.put("SAVE", t);
-				waitSaveEvents.countDown();
-			}
-		});
+		final CountDownLatch waitSaveEvents = new CountDownLatch(2); //Wait two events on Monitor node and Get node
 		
-		getConfigService.listenUpdates().subscribe(new Observer<ConfigurationEvent>() {
+		getConfigService.listen().subscribe(new Observer<ConfigurationEvent>() {
 
 			@Override
 			public void onCompleted() {
@@ -156,14 +158,39 @@ public class ConfigServiceClusterTest {
 			@Override
 			public void onNext(ConfigurationEvent t) {
 				logger.debug("getConfigService() {}: type={}",t.toString(),t.getUpdateType());
-				receivedConfigUpdates.put("GET", t);
-				waitSaveEvents.countDown();
+				if (t.getTypeClass() == ServerConfigEntity.class) {
+					receivedConfigUpdates.put("GET", t);
+					waitSaveEvents.countDown();
+				}
+			}
+		});
+		
+		monitorConfigService.listen().subscribe(new Observer<ConfigurationEvent>() {
+
+			@Override
+			public void onCompleted() {
+				
+			}
+
+			@Override
+			public void onError(Throwable e) {
+				
+			}
+
+			@Override
+			public void onNext(ConfigurationEvent t) {
+				logger.debug("monitorConfigService() {}: type={}",t.toString(),t.getUpdateType());
+				if (t.getTypeClass() == ServerConfigEntity.class) {
+					receivedConfigUpdates.put("MON", t);
+					waitSaveEvents.countDown();
+				}
 			}
 		});
 		
 		//Save new ConfigEntity
 		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
 		try {
+			logger.debug("Try to save()");
 			saveConfigService.save(testConfiguration.getId(), testConfiguration);
 		} catch (Exception e) {
 			fail(e.toString());
@@ -174,8 +201,8 @@ public class ConfigServiceClusterTest {
 		//Check that both entity in updates equals
 		assertEquals(2, receivedConfigUpdates.size());
 		assertTrue(receivedConfigUpdates.containsKey("GET"));
-		assertTrue(receivedConfigUpdates.containsKey("SAVE"));
-		assertEquals(receivedConfigUpdates.get("GET").getNewValue(), receivedConfigUpdates.get("SAVE").getNewValue());
-		
+		assertTrue(receivedConfigUpdates.containsKey("MON"));
+		assertEquals(testConfiguration, receivedConfigUpdates.get("GET").getNewValue());
+		assertEquals(testConfiguration, receivedConfigUpdates.get("MON").getNewValue());
 	}
 }
