@@ -2,21 +2,26 @@ package com.ogp.configurator;
 
 import static org.junit.Assert.*;
 
+import java.util.Hashtable;
 import java.util.Iterator;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.curator.RetryPolicy;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
-import org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.curator.retry.RetryNTimes;
 import org.apache.curator.test.InstanceSpec;
 import org.apache.curator.test.TestingCluster;
-import org.apache.curator.test.TestingServer;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import rx.Observer;
 
 import com.ogp.configurator.examples.ServerConfigEntity;
 import com.ogp.configurator.serializer.JacksonSerializator;
@@ -27,14 +32,18 @@ import com.ogp.configurator.serializer.JacksonSerializator;
  */
 
 public class ConfigServiceClusterTest {
+	private static final Logger logger = LoggerFactory.getLogger(ConfigServiceClusterTest.class);
+	
 	private static final String ENVIRONMENT = "local";
 	private static final String CONFIG_TYPE = "server";
 	private static TestingCluster curatorCluster;
 	private static  RetryPolicy retryPolicy;	
-	private CuratorFramework upsertClient;
+	private CuratorFramework saveClient;
 	private CuratorFramework getClient;
-	private ConfigService upsertConfigService;
-	private ConfigService getConfigService;
+	private CuratorFramework monitorClient;
+	private IConfigurationManagement saveConfigService;
+	private IConfiguration getConfigService;
+	private IConfigurationMonitor monitorConfigService;
 	
 	/**
 	 * @throws java.lang.Exception
@@ -66,30 +75,45 @@ public class ConfigServiceClusterTest {
 		assertNotNull(curatorCluster.getInstances());
 		assertEquals(3, curatorCluster.getInstances().size());
 		Iterator<InstanceSpec> it = curatorCluster.getInstances().iterator(); 
-		String upsertServerConnString = it.next().getConnectString();
+		String saveServerConnString = it.next().getConnectString();
+		String monitorServerConnString = it.next().getConnectString();
 		String getServerConnString = it.next().getConnectString();
-		assertNotNull(upsertServerConnString);
+		assertNotNull(saveServerConnString);
+		assertNotNull(monitorServerConnString);
 		assertNotNull(getServerConnString);
-		assertNotEquals(upsertServerConnString, getServerConnString);
+		assertNotEquals(saveServerConnString, getServerConnString);
+		assertNotEquals(saveServerConnString, monitorServerConnString);
+		assertNotEquals(getServerConnString, monitorServerConnString);
 		
-		System.out.printf("Upsert server %s\n", upsertServerConnString);
-		System.out.printf("get server %s\n", getServerConnString);
+		logger.info("Save server connect string %s\n", saveServerConnString);
+		logger.info("Monitor server connect string %s\n", monitorServerConnString);
+		logger.info("Get server %s\n", getServerConnString);
 		
-		upsertClient = CuratorFrameworkFactory.newClient(upsertServerConnString, retryPolicy);
-		upsertClient.start();
-		upsertClient.blockUntilConnected();
-		upsertConfigService = ConfigService.newBuilder(upsertClient, new JacksonSerializator(), ENVIRONMENT)
+		saveClient = CuratorFrameworkFactory.newClient(saveServerConnString, retryPolicy);
+		saveClient.start();
+		saveClient.blockUntilConnected();
+		saveConfigService = ConfigurationManager.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
-		upsertConfigService.awaitConnected();
+		saveConfigService.start();
+		saveConfigService.awaitConnected();
+		
+		monitorClient = CuratorFrameworkFactory.newClient(monitorServerConnString, retryPolicy);
+		monitorClient.start();
+		monitorClient.blockUntilConnected();
+		monitorConfigService = ConfigurationMonitor.newBuilder(saveClient, new JacksonSerializator(), ENVIRONMENT)
+				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
+				.build();
+		monitorConfigService.start();
+		
 		
 		getClient = CuratorFrameworkFactory.newClient(getServerConnString, retryPolicy);
 		getClient.start();
 		getClient.blockUntilConnected();
-		getConfigService = ConfigService.newBuilder(upsertClient, new JacksonSerializator(), ENVIRONMENT)
+		getConfigService = Configuration.newBuilder(getClient, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.build();
-		getConfigService.awaitConnected();
+		getConfigService.start();
 		
 	}
 
@@ -98,9 +122,13 @@ public class ConfigServiceClusterTest {
 	 */
 	@After
 	public void tearDown() throws Exception {
-		upsertClient.close();
-		upsertClient = null;
-		upsertConfigService = null;
+		saveClient.close();
+		saveClient = null;
+		saveConfigService = null;
+		
+		monitorClient.close();
+		monitorClient = null;
+		monitorConfigService = null;
 		
 		getClient.close();
 		getClient = null;
@@ -108,43 +136,73 @@ public class ConfigServiceClusterTest {
 	}
 
 	@Test
-	public void testUpsertConfigEntityOnDifferentNodes() throws Exception {
-		//assertNotNull(upsertConfigService);
+	public void testSaveConfigEntityOnDifferentNodes() throws Exception {
+		assertNotNull(saveConfigService);
 		assertNotNull(getConfigService);
+		
+		final Hashtable<String, ConfigurationEvent> receivedConfigUpdates = new Hashtable<String, ConfigurationEvent>();
+		final CountDownLatch waitSaveEvents = new CountDownLatch(2); //Wait two events on Monitor node and Get node
+		
+		getConfigService.listen().subscribe(new Observer<ConfigurationEvent>() {
+
+			@Override
+			public void onCompleted() {
+				
+			}
+
+			@Override
+			public void onError(Throwable e) {
+				
+			}
+
+			@Override
+			public void onNext(ConfigurationEvent t) {
+				logger.debug("getConfigService() {}: type={}",t.toString(),t.getUpdateType());
+				if (t.getTypeClass() == ServerConfigEntity.class) {
+					receivedConfigUpdates.put("GET", t);
+					waitSaveEvents.countDown();
+				}
+			}
+		});
+		
+		monitorConfigService.listen().subscribe(new Observer<ConfigurationEvent>() {
+
+			@Override
+			public void onCompleted() {
+				
+			}
+
+			@Override
+			public void onError(Throwable e) {
+				
+			}
+
+			@Override
+			public void onNext(ConfigurationEvent t) {
+				logger.debug("monitorConfigService() {}: type={}",t.toString(),t.getUpdateType());
+				if (t.getTypeClass() == ServerConfigEntity.class) {
+					receivedConfigUpdates.put("MON", t);
+					waitSaveEvents.countDown();
+				}
+			}
+		});
+		
+		//Save new ConfigEntity
 		ServerConfigEntity testConfiguration = new ServerConfigEntity("10","name","host",10);
 		try {
-			assertTrue(upsertConfigService.upsertConfigEntity(testConfiguration.getId(), testConfiguration));
+			logger.debug("Try to save()");
+			saveConfigService.save(testConfiguration.getId(), testConfiguration);
 		} catch (Exception e) {
 			fail(e.toString());
 		}
+		//Wait until both services got events
+		assertTrue(waitSaveEvents.await(1, TimeUnit.MINUTES));
 		
-		long addStart = System.currentTimeMillis();
-		
-		ServerConfigEntity gotEntity = getConfigService.getConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
-		while(gotEntity == null) {
-			if ((System.currentTimeMillis() - addStart) > 10000) {
-				fail("Error: Add entitiy failed, timeout 10sec");
-			}
-			Thread.sleep(500);
-			gotEntity = getConfigService.getConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
-		}
-		assertNotNull(gotEntity);
-		assertEquals("10", gotEntity.getId());
-		assertEquals("name", gotEntity.getName());
-		assertEquals("host", gotEntity.getHost());
-		assertEquals(10, gotEntity.getPort());
-		
-		upsertConfigService.deleteConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
-		
-		long delStart = System.currentTimeMillis();
-		
-		gotEntity = getConfigService.getConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
-		while(gotEntity != null) {
-			if ((System.currentTimeMillis() - delStart) > 10000) {
-				fail("Error: Del entitiy failed, timeout 10sec");
-			}
-			Thread.sleep(500);
-			gotEntity = getConfigService.getConfigEntity(ServerConfigEntity.class, testConfiguration.getId());
-		}
+		//Check that both entity in updates equals
+		assertEquals(2, receivedConfigUpdates.size());
+		assertTrue(receivedConfigUpdates.containsKey("GET"));
+		assertTrue(receivedConfigUpdates.containsKey("MON"));
+		assertEquals(testConfiguration, receivedConfigUpdates.get("GET").getNewValue());
+		assertEquals(testConfiguration, receivedConfigUpdates.get("MON").getNewValue());
 	}
 }
