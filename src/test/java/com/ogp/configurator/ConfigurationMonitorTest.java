@@ -275,14 +275,14 @@ public class ConfigurationMonitorTest {
 		assertNotNull(testRate);
 		assertTrue(configManger.isConnected());
 
+		configManger.save(testConfig.getId(), testConfig);
+
 		configMonitor = ConfigurationMonitor.newBuilder(client, new JacksonSerializator(), ENVIRONMENT)
 				.registerConfigType(CONFIG_TYPE, ServerConfigEntity.class)
 				.registerConfigType(RATES_TYPE, FixedCurrencyRates.class)
 				.build();
 		
 		assertNotNull(configMonitor);
-		
-		
 		
 		final CountDownLatch sync = new CountDownLatch(1);
 		final CountDownLatch del = new CountDownLatch(1);
@@ -297,6 +297,7 @@ public class ConfigurationMonitorTest {
 
 			@Override
 			public void onNext(ConfigurationEvent event) {
+				System.out.println("===" + event);
 				if (event.getConfigType() == ConfigType.INITIALIZED) {
 					sync.countDown();
 				} else if (event.getUpdateType() == UpdateType.REMOVED) {
@@ -310,12 +311,11 @@ public class ConfigurationMonitorTest {
 		configMonitor.start();
 		
 		assertTrue(sync.await(1, TimeUnit.MINUTES));
-		
-		configManger.save(testConfig.getId(), testConfig);
+
 		configManger.delete(testConfig.getClass(), testConfig.getId());
-		
+
 		assertTrue(del.await(1, TimeUnit.MINUTES));
-		
+
 	}
 	
 	@Test
